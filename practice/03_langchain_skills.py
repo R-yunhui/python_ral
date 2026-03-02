@@ -18,18 +18,20 @@ from agentskills_fs import LocalFileSystemSkillProvider
 from agentskills_langchain import get_tools, get_tools_usage_instructions
 
 from langchain.agents import create_agent
-from langchain_community.chat_models import ChatTongyi
+from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.output_parsers import JsonOutputParser
 
 
 # 加载环境配置
 load_dotenv()
 
-# 创建模型
-model = ChatTongyi(
-    model=os.getenv("QWEN_CHAT_MODEL"), api_key=os.getenv("DASHSCOPE_API_KEY")
+# 使用通义千问模型
+model = ChatOpenAI(
+    model=os.getenv("QWEN_CHAT_MODEL"), 
+    api_key=os.getenv("DASHSCOPE_API_KEY"),
+    streaming=True,
+    base_url=os.getenv("DASHSCOPE_BASE_URL"),
 )
-
 
 def extract_json_from_content(content: str) -> Optional[Dict[str, Any]]:
     """
