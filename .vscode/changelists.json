@@ -1,0 +1,47 @@
+{
+  "changelists": [
+    {
+      "name": "Default",
+      "files": [
+        "main.py",
+        "pyproject.toml",
+        "uv.lock",
+        "rag/README.md",
+        "rag/__init__.py",
+        "rag/api/__init__.py",
+        "rag/api/main.py",
+        "rag/api/routers/__init__.py",
+        "rag/api/routers/chat.py",
+        "rag/api/routers/document.py",
+        "rag/api/routers/knowledge_base.py",
+        "rag/api/schemas.py",
+        "rag/models/__init__.py",
+        "rag/models/database.py",
+        "rag/models/models.py",
+        "rag/service/__init__.py",
+        "rag/service/chat_service.py",
+        "rag/service/document_service.py",
+        "rag/service/kb_service.py",
+        "rag/static/css/style.css",
+        "rag/static/index.html",
+        "rag/static/js/app.js",
+        "start_rag.py",
+        ".vscode/changelists.json",
+        "rag/config.py",
+        "rag/service/qdrant_client.py",
+        ".env.example",
+        "rag/utils/__init__.py",
+        "rag/utils/logger.py",
+        "rag/service/mcp_service.py",
+        "rag/service/skills_service.py",
+        "bisheng_generator/workflow_generator.py",
+        "practice/03_langchain_skills.py",
+        "skills/api-docs/SKILL.md",
+        "skills/bisheng-workflow-generator/SKILL.md",
+        "skills/dify-dsl-generator/SKILL.md",
+        "skills/code-review/SKILL.md"
+      ]
+    }
+  ],
+  "active": "Default"
+}

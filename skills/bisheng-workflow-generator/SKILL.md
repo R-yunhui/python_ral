@@ -1,7 +1,6 @@
 ---
 name: bisheng-workflow-generator
 description: 专业的毕昇 (BiSheng) 工作流 JSON 文件生成器，根据用户业务需求自动生成完整的毕昇工作流配置文件，支持各种节点类型和复杂工作流逻辑。当用户提到毕昇、bisheng、毕升工作流时自动触发。
-version: 2.1.0
 ---
 
 # 毕昇 (BiSheng) 工作流生成器

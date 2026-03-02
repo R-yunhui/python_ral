@@ -1,7 +1,6 @@
 ---
 name: dify-dsl-generator
 description: 专业的 Dify 工作流 DSL/YML 文件生成器，根据用户业务需求自动生成完整的 Dify 工作流配置文件，支持各种节点类型和复杂工作流逻辑
-version: 1.1.0
 ---
 
 # Dify DSL 工作流生成器
