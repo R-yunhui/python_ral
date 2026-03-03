@@ -1251,14 +1251,33 @@ html, body {
 /* ==================== Markdown 样式 ==================== */
 .markdown-body {
   word-wrap: break-word;
+  line-height: 1.6;
+  color: var(--text-primary);
 }
 
 .markdown-body p {
-  margin-bottom: 0.5em;
+  margin-bottom: 0.75em;
 }
 
 .markdown-body p:last-child {
   margin-bottom: 0;
+}
+
+/* 加粗文本 */
+.markdown-body strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* 斜体文本 */
+.markdown-body em {
+  font-style: italic;
+}
+
+/* 删除线 */
+.markdown-body del {
+  text-decoration: line-through;
+  color: var(--text-muted);
 }
 
 .markdown-body pre {

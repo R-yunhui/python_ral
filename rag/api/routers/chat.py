@@ -1,15 +1,14 @@
 """
 问答 API 路由
-支持普通问答和 RAG 知识库问答
+仅支持流式问答
 """
 
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session
 
 from rag.models.database import get_session
-from rag.api.schemas import ChatRequest, RAGChatRequest, ChatResponse, MessageResponse
+from rag.api.schemas import ChatRequest, RAGChatRequest
 from rag.service.kb_service import kb_service
 from rag.service.chat_service import chat_service
 from rag.utils.logger import get_logger
@@ -19,38 +18,27 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["问答"])
 
 
-@router.post("", response_model=ChatResponse, summary="普通问答")
+@router.post("", summary="流式普通问答")
 async def chat(request: ChatRequest):
-    """普通问答，直接调用 LLM"""
-    logger.info(f"API: 普通问答 - stream={request.stream}")
+    """普通问答（流式）"""
+    logger.info(f"API: 流式普通问答")
     try:
-        if request.stream:
-            # 流式响应
-            logger.debug("API: 使用流式响应")
-            return StreamingResponse(
-                chat_service.chat_stream(request.question),
-                media_type="text/event-stream",
-            )
-        else:
-            # 非流式响应
-            logger.debug("API: 使用非流式响应")
-            answer = chat_service.chat(request.question)
-            logger.info("API: 普通问答完成")
-            return ChatResponse(answer=answer)
-    except HTTPException:
-        raise
+        return StreamingResponse(
+            chat_service.chat_astream(request.question),
+            media_type="text/event-stream",
+        )
     except Exception as e:
-        logger.error(f"API: 普通问答失败 - {e}", exc_info=True)
+        logger.error(f"API: 流式问答失败 - {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"问答失败：{str(e)}")
 
 
-@router.post("/rag", summary="知识库问答")
+@router.post("/rag", summary="流式知识库问答")
 async def rag_chat(
     request: RAGChatRequest,
     session: Session = Depends(get_session),
 ):
-    """RAG 知识库问答"""
-    logger.info(f"API: RAG 问答 - kb_ids={request.kb_ids}, stream={request.stream}")
+    """RAG 知识库问答（流式）"""
+    logger.info(f"API: RAG 流式问答 - kb_ids={request.kb_ids}")
     try:
         # 获取知识库集合名称
         collection_names = []
@@ -67,44 +55,14 @@ async def rag_chat(
 
         logger.debug(f"API: 使用集合 - {collection_names}")
 
-        if request.stream:
-            # 流式响应
-            logger.debug("API: 使用流式响应")
-            return StreamingResponse(
-                chat_service.rag_chat_stream(
-                    question=request.question,
-                    collection_names=collection_names,
-                    top_k=request.top_k,
-                ),
-                media_type="text/event-stream",
-            )
-        else:
-            # 非流式响应
-            logger.debug("API: 使用非流式响应")
-            answer = chat_service.rag_chat(
+        return StreamingResponse(
+            chat_service.rag_chat_astream(
                 question=request.question,
                 collection_names=collection_names,
                 top_k=request.top_k,
-            )
-            logger.info("API: RAG 问答完成")
-            return ChatResponse(answer=answer)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"API: RAG 问答失败 - {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"问答失败：{str(e)}")
-
-
-@router.post("/stream", summary="流式普通问答")
-async def chat_stream(request: ChatRequest):
-    """流式普通问答"""
-    logger.info(f"API: 流式普通问答")
-    try:
-        return StreamingResponse(
-            chat_service.chat_stream(request.question),
+            ),
             media_type="text/event-stream",
         )
     except Exception as e:
-        logger.error(f"API: 流式问答失败 - {e}", exc_info=True)
+        logger.error(f"API: RAG 流式问答失败 - {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"问答失败：{str(e)}")

@@ -16,9 +16,8 @@ from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings, 
 from llama_index.embeddings.langchain import LangchainEmbedding
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 
-from rag.models.models import KnowledgeBase, Document, DocumentStatus
+from rag.models.models import Document, DocumentStatus
 from rag.config import (
-    DOCUMENTS_ROOT,
     SUPPORTED_EXTENSIONS,
     CHUNK_SIZE,
     CHUNK_OVERLAP,

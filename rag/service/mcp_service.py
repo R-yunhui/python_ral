@@ -14,6 +14,7 @@ import sys
 import asyncio
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
+from langchain_openai.chat_models import ChatOpenAI
 
 # 添加项目根目录到 Python 路径
 project_root = os.path.dirname(
@@ -21,8 +22,14 @@ project_root = os.path.dirname(
 )
 sys.path.insert(0, project_root)
 
+from langchain_core.runnables.config import RunnableConfig
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_core.tools import BaseTool
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain.agents import create_agent
+from langchain.messages import HumanMessage, SystemMessage
+from langgraph.checkpoint.memory import InMemorySaver
+
 
 from rag.utils.logger import get_logger
 
@@ -248,12 +255,43 @@ async def example_usage():
     # 初始化全局服务（从环境变量加载）
     await init_mcp_service()
 
-    # 获取工具
+    model = ChatOpenAI(
+        model=os.getenv("QWEN_CHAT_MODEL"),
+        api_key=os.getenv("DASHSCOPE_API_KEY"),
+        streaming=True,
+        base_url=os.getenv("DASHSCOPE_BASE_URL"),
+    )
+
+    checkpointer = InMemorySaver()
+
     tools = await get_mcp_tools()
+
+    agent = create_agent(
+        model=model,
+        system_prompt=SystemMessage(
+            content="""你是一个专业的聊天助手，可以使用工具回答问题。
+    """
+        ),
+        tools=tools,
+        debug=True,
+        checkpointer=checkpointer,
+    )
+
+    # 获取工具
     logger.info(f"本次加载了 {len(tools)} 个 MCP 工具")
     for tool in tools:
         logger.info(f"工具名称: {tool.name}")
         logger.info(f"工具描述: {tool.description}")
+
+    async for chunk, metadata in agent.astream(
+        input={"messages": [HumanMessage(content="你好, 成都明天的天气如何？")]},
+        stream_mode="messages",
+        config=RunnableConfig(
+            configurable={"thread_id": "thread-1"},
+        ),
+    ):
+        if chunk.content != "" and metadata["langgraph_node"] != "tools":
+            print(chunk.content, end="", flush=True)
 
 
 if __name__ == "__main__":

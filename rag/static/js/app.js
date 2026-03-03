@@ -95,7 +95,24 @@ const app = createApp({
         console.warn('marked library not loaded, returning plain text');
         return text;
       }
-      return marked.parse(text);
+      
+      try {
+        // 配置 marked 选项
+        marked.setOptions({
+          breaks: true,        // 支持 GFM 换行
+          gfm: true,          // GitHub Flavored Markdown
+          headerIds: false,   // 不为标题添加 ID（避免冲突）
+          mangle: false,      // 不转义 HTML 实体
+          smartLists: true,   // 智能列表
+          smartypants: false, // 不使用智能标点（避免中文问题）
+          pedantic: false,    // 不严格遵循 Markdown 规范
+        });
+        
+        return marked.parse(text);
+      } catch (error) {
+        console.error('Markdown 渲染失败:', error);
+        return text; // 渲染失败时返回原文本
+      }
     };
 
     // ==================== 主题管理 ====================

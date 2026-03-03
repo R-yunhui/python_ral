@@ -3,9 +3,7 @@
 处理知识库的创建、删除、查询以及 Qdrant 集合管理
 """
 
-import uuid
 from typing import List, Optional
-from pathlib import Path
 from sqlmodel import Session, select
 
 from qdrant_client.http import models as qdrant_models

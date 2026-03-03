@@ -45,7 +45,7 @@ CHUNK_SIZE = 512      # 文本分块大小
 CHUNK_OVERLAP = 50    # 分块重叠
 
 # Embedding 模型配置
-EMBEDDING_MODEL = "text-embedding-v3"
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
 EMBEDDING_DIMENSION = 1024  # DashScope text-embedding-v3 维度
 
 # LLM 配置
