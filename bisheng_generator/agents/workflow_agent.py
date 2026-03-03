@@ -149,8 +149,198 @@ class WorkflowAgent:
             # 如果生成失败，返回错误信息
             return {"error": "工作流生成失败", "content": content}
 
-        logger.info(f"工作流生成成功，包含 {len(workflow_json)} 个节点")
+        # 规范化工作流，补全毕昇前端必需的 value 等字段，避免导入时报 "Cannot read properties of undefined (reading 'value')"
+        workflow_json = self._normalize_workflow(workflow_json)
+
+        logger.info(f"工作流生成成功，包含 {len(workflow_json.get('nodes', []))} 个节点")
         return workflow_json
+
+    def _normalize_workflow(self, w: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        规范化工作流 JSON，补全毕昇前端必需的字段，避免导入时报错
+        （如 Cannot read properties of undefined (reading 'value')）
+
+        包含：顶层字段、节点结构、param.value 补全、knowledge_retriever/llm 特殊参数、
+        edges、viewport 等。
+        """
+        from datetime import datetime
+        now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+
+        # 1. 顶层字段
+        self._normalize_top_level(w, now)
+
+        # 2. 节点结构与 param 补全
+        for node in w.get("nodes", []):
+            self._normalize_node(node)
+
+        # 3. edges 结构
+        self._normalize_edges(w)
+
+        # 4. viewport
+        if "viewport" not in w or not isinstance(w["viewport"], dict):
+            w["viewport"] = {"x": 0, "y": 0, "zoom": 1}
+        vp = w["viewport"]
+        vp.setdefault("x", 0)
+        vp.setdefault("y", 0)
+        vp.setdefault("zoom", 1)
+
+        return w
+
+    def _normalize_top_level(self, w: Dict[str, Any], now: str) -> None:
+        """补全顶层必需字段"""
+        if "guide_word" not in w or w["guide_word"] == "":
+            for node in w.get("nodes", []):
+                d = node.get("data", {})
+                if d.get("type") == "start":
+                    for grp in d.get("group_params", []):
+                        for p in grp.get("params", []):
+                            if p.get("key") == "guide_word" and "value" in p and p["value"]:
+                                w["guide_word"] = p["value"]
+                                break
+                    break
+            if "guide_word" not in w:
+                w["guide_word"] = ""
+        w.setdefault("create_time", now)
+        w.setdefault("update_time", now)
+        w.setdefault("logo", "")
+
+    def _normalize_node(self, node: Dict[str, Any]) -> None:
+        """规范化单个节点：结构、param.value、特殊参数"""
+        node_id = node.get("id", "")
+        data = node.setdefault("data", {})
+        node_type = data.get("type")
+
+        # 节点必需结构
+        data.setdefault("id", node_id)
+        data.setdefault("description", "")
+        node.setdefault("type", "flowNode")
+        node.setdefault("position", {"x": 0, "y": 0})
+        node.setdefault("measured", {"width": 334, "height": 500})
+
+        # tab 节点需有 tab.value（input 默认 dialog_input，llm 默认 single）
+        if "tab" in data and isinstance(data["tab"], dict):
+            tab = data["tab"]
+            if "value" not in tab or not tab["value"]:
+                opts = tab.get("options", [])
+                default = "single" if node_type == "llm" else "dialog_input"
+                tab["value"] = opts[0].get("key", default) if opts else default
+
+        for grp in data.get("group_params", []):
+            params = grp.get("params", [])
+            for p in params:
+                self._ensure_param_value(p)
+
+            # knowledge_retriever 特殊参数
+            if node_type == "knowledge_retriever" and grp.get("name") == "知识库检索设置":
+                self._ensure_knowledge_retriever_params(params)
+
+            # llm 模型设置
+            if node_type == "llm" and grp.get("name") == "模型设置":
+                self._ensure_llm_model_params(params)
+
+    def _ensure_param_value(self, p: Dict[str, Any]) -> None:
+        """确保 param 有 value，根据 type 设置合理默认值"""
+        pt = p.get("type", "")
+        if "value" not in p or p["value"] is None:
+            pass  # 继续走下面的默认值逻辑
+        else:
+            v = p["value"]
+            if pt == "output_form" and isinstance(v, dict):
+                v.setdefault("type", "")
+                v.setdefault("value", "")
+            elif pt == "var_textarea_file" and isinstance(v, dict):
+                v.setdefault("msg", "")
+                v.setdefault("files", [])
+            return
+
+        pt = p.get("type", "")
+        g = p.get("global", "")
+        key = p.get("key", "")
+
+        if pt == "var":
+            if g == "key":
+                p["value"] = ""
+            elif str(g).startswith("code:"):
+                p["value"] = []
+            else:
+                p["value"] = []
+        elif pt == "switch":
+            p["value"] = True
+        elif pt == "slide":
+            p["value"] = 0.3
+        elif pt == "output_form":
+            p["value"] = {"type": "", "value": ""}
+        elif pt == "var_textarea_file":
+            p["value"] = {"msg": "", "files": []}
+        elif pt == "metadata_filter":
+            p["value"] = {"enabled": False}
+        elif pt == "search_switch":
+            p["value"] = {
+                "keyword_weight": 0.4,
+                "vector_weight": 0.6,
+                "user_auth": False,
+                "search_switch": True,
+                "rerank_flag": False,
+                "rerank_model": "",
+                "max_chunk_size": 15000,
+            }
+        elif key == "condition" and pt == "condition":
+            # condition 节点，value 由 LLM 生成，缺失时给空数组
+            if "value" not in p:
+                p["value"] = []
+        else:
+            p["value"] = "" if pt not in ("input_list", "user_question") else []
+
+    def _ensure_knowledge_retriever_params(self, params: List[Dict[str, Any]]) -> None:
+        """知识库检索节点必须包含 metadata_filter、advanced_retrieval_switch"""
+        keys = [x.get("key") for x in params]
+        if "metadata_filter" not in keys:
+            params.append({
+                "key": "metadata_filter",
+                "type": "metadata_filter",
+                "label": "true",
+                "value": {"enabled": False},
+            })
+        if "advanced_retrieval_switch" not in keys:
+            params.append({
+                "key": "advanced_retrieval_switch",
+                "type": "search_switch",
+                "label": "true",
+                "value": {
+                    "keyword_weight": 0.4,
+                    "vector_weight": 0.6,
+                    "user_auth": False,
+                    "search_switch": True,
+                    "rerank_flag": False,
+                    "rerank_model": "",
+                    "max_chunk_size": 15000,
+                },
+            })
+
+    def _ensure_llm_model_params(self, params: List[Dict[str, Any]]) -> None:
+        """LLM 模型设置必须包含 temperature"""
+        keys = [x.get("key") for x in params]
+        if "temperature" not in keys:
+            params.append({
+                "key": "temperature",
+                "step": 0.1,
+                "type": "slide",
+                "label": "true",
+                "scope": [0, 2],
+                "value": 0.3,
+            })
+
+    def _normalize_edges(self, w: Dict[str, Any]) -> None:
+        """确保 edges 每项有必需字段"""
+        for e in w.get("edges", []):
+            e.setdefault("type", "customEdge")
+            e.setdefault("animated", True)
+            e.setdefault("sourceHandle", "right_handle")
+            e.setdefault("targetHandle", "left_handle")
+            if "id" not in e and "source" in e and "target" in e:
+                sh = e.get("sourceHandle", "right_handle")
+                th = e.get("targetHandle", "left_handle")
+                e["id"] = f"xy-edge__{e['source']}{sh}-{e['target']}{th}"
 
     def _format_tools_info(self, tool_plan: ToolPlan) -> str:
         """格式化工具信息"""

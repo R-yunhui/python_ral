@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>毕昇工作流生成器</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 毕昇工作流生成器</h1>
+            <p class="subtitle">输入您的需求，自动生成工作流</p>
+        </header>
+
+        <main>
+            <!-- 输入区域 -->
+            <section class="input-section">
+                <div class="form-group">
+                    <label for="queryInput">工作流需求描述：</label>
+                    <textarea 
+                        id="queryInput" 
+                        placeholder="例如：创建一个深汕招商政策查询助手，支持获取相应的政策信息，同时也支持普通的日常问答和天气查询..."
+                        rows="4"
+                    ></textarea>
+                </div>
+                <button id="generateBtn" class="btn btn-primary">
+                    <span class="btn-text">生成工作流</span>
+                    <span class="btn-loading" style="display: none;">生成中...</span>
+                </button>
+            </section>
+
+            <!-- 加载动画 -->
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>正在生成工作流，请稍候...</p>
+            </div>
+
+            <!-- 进度展示区域 -->
+            <div id="progressSection" class="progress-section" style="display: none;">
+                <div class="progress-header">
+                    <h3>📊 执行进度</h3>
+                    <span id="progressPercent" class="progress-percentage">0%</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div id="progressBar" class="progress-bar" style="width: 0%;"></div>
+                </div>
+                <div id="progressLogs" class="progress-logs">
+                    <!-- 动态添加进度日志 -->
+                </div>
+            </div>
+
+            <!-- 错误提示 -->
+            <div id="error" class="alert alert-error" style="display: none;"></div>
+
+            <!-- 结果展示区域 -->
+            <section id="result" class="result-section" style="display: none;">
+                <div class="result-header">
+                    <h2>生成结果</h2>
+                    <div class="result-actions">
+                        <button id="downloadBtn" class="btn btn-success">下载 JSON</button>
+                        <button id="copyBtn" class="btn btn-secondary">复制 JSON</button>
+                    </div>
+                </div>
+
+                <!-- 元数据展示 -->
+                <div id="metadata" class="metadata"></div>
+
+                <!-- JSON 展示 -->
+                <div class="json-viewer">
+                    <div class="json-header">
+                        <span>工作流 JSON</span>
+                        <button id="toggleJsonBtn" class="btn btn-sm btn-secondary">收起/展开</button>
+                    </div>
+                    <pre id="jsonContent"><code></code></pre>
+                </div>
+            </section>
+
+            <!-- 历史工作流列表 -->
+            <section class="history-section">
+                <h2>历史工作流</h2>
+                <button id="refreshHistoryBtn" class="btn btn-sm btn-secondary">刷新列表</button>
+                <div id="historyList" class="history-list"></div>
+            </section>
+        </main>
+
+        <footer>
+            <p>毕昇工作流生成器 v0.2.0 | Powered by FastAPI + LangGraph</p>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,571 @@
+// 毕昇工作流生成器 - 前端交互逻辑
+
+// DOM 元素
+const queryInput = document.getElementById('queryInput');
+const generateBtn = document.getElementById('generateBtn');
+const loading = document.getElementById('loading');
+const progressSection = document.getElementById('progressSection');
+const progressBar = document.getElementById('progressBar');
+const progressPercent = document.getElementById('progressPercent');
+const progressLogs = document.getElementById('progressLogs');
+const error = document.getElementById('error');
+const result = document.getElementById('result');
+const jsonContent = document.getElementById('jsonContent');
+const metadata = document.getElementById('metadata');
+const downloadBtn = document.getElementById('downloadBtn');
+const copyBtn = document.getElementById('copyBtn');
+const toggleJsonBtn = document.getElementById('toggleJsonBtn');
+const historyList = document.getElementById('historyList');
+const refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
+
+// 当前生成的工作流
+let currentWorkflow = null;
+let currentFilename = null;
+
+// SSE 连接
+let eventSource = null;
+
+// 初始化
+document.addEventListener('DOMContentLoaded', () => {
+    loadHistory();
+    setupEventListeners();
+});
+
+// 设置事件监听
+function setupEventListeners() {
+    generateBtn.addEventListener('click', handleGenerate);
+    downloadBtn.addEventListener('click', handleDownload);
+    copyBtn.addEventListener('click', handleCopy);
+    toggleJsonBtn.addEventListener('click', handleToggleJson);
+    refreshHistoryBtn.addEventListener('click', loadHistory);
+}
+
+// 处理生成请求
+async function handleGenerate() {
+    const query = queryInput.value.trim();
+    
+    if (!query) {
+        showError('请输入工作流需求描述');
+        return;
+    }
+
+    // 重置状态
+    hideError();
+    hideResult();
+    hideProgress();
+    showLoading();
+    disableGenerateBtn(true);
+
+    try {
+        // 使用 SSE 流式生成
+        await generateWithSSE(query);
+    } catch (err) {
+        console.error('生成失败:', err);
+        showError(`生成失败：${err.message}`);
+        hideLoading();
+        hideProgress();
+        disableGenerateBtn(false);
+    }
+}
+
+// 使用 SSE 进行流式生成
+async function generateWithSSE(query) {
+    return new Promise((resolve, reject) => {
+        // 创建 SSE 连接
+        const eventSource = new EventSource('/api/generate/stream', {
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        let isComplete = false;
+
+        // 监听进度事件
+        eventSource.addEventListener('progress', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                handleProgressEvent(data);
+            } catch (err) {
+                console.error('解析进度事件失败:', err);
+            }
+        });
+
+        // 监听最终结果事件
+        eventSource.addEventListener('final_result', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                isComplete = true;
+                
+                // 关闭连接
+                eventSource.close();
+                
+                // 隐藏加载动画
+                hideLoading();
+                hideProgress();
+                
+                // 显示结果
+                if (data.status === 'success') {
+                    showResult(data);
+                } else {
+                    showError(data.message || '生成失败');
+                }
+                
+                // 启用按钮
+                disableGenerateBtn(false);
+                
+                resolve();
+            } catch (err) {
+                console.error('解析最终结果失败:', err);
+                reject(err);
+            }
+        });
+
+        // 监听错误事件
+        eventSource.addEventListener('error', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                isComplete = true;
+                
+                // 关闭连接
+                eventSource.close();
+                
+                // 隐藏加载动画
+                hideLoading();
+                hideProgress();
+                
+                // 显示错误
+                showError(data.message || data.error || '生成失败');
+                
+                // 启用按钮
+                disableGenerateBtn(false);
+                
+                reject(new Error(data.message || data.error || '生成失败'));
+            } catch (err) {
+                console.error('解析错误事件失败:', err);
+                reject(err);
+            }
+        });
+
+        // 连接错误处理
+        eventSource.onerror = (err) => {
+            if (!isComplete) {
+                console.error('SSE 连接错误:', err);
+                eventSource.close();
+                hideLoading();
+                hideProgress();
+                disableGenerateBtn(false);
+                reject(new Error('连接服务器失败'));
+            }
+        };
+
+        // 发送生成请求
+        fetch('/api/generate/stream', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ query })
+        }).catch((err) => {
+            console.error('发送请求失败:', err);
+            if (!isComplete) {
+                eventSource.close();
+                hideLoading();
+                hideProgress();
+                disableGenerateBtn(false);
+                reject(err);
+            }
+        });
+    });
+}
+
+// 处理进度事件
+function handleProgressEvent(data) {
+    const { event_type, agent_name, message, progress, data: eventData, duration_ms, error } = data;
+    
+    // 显示进度区域
+    progressSection.style.display = 'block';
+    
+    // 更新进度条
+    if (progress !== undefined && progress !== null) {
+        updateProgressBar(progress);
+    }
+    
+    // 添加日志项
+    if (event_type === 'agent_start') {
+        addProgressLog(message, 'running', agent_name);
+    } else if (event_type === 'agent_complete') {
+        updateLastLog('success', message, eventData, duration_ms);
+    } else if (event_type === 'agent_error') {
+        updateLastLog('error', message, { error }, duration_ms);
+    } else if (event_type === 'start') {
+        addProgressLog(message, 'running');
+    } else if (event_type === 'complete') {
+        updateLastLog('success', message, eventData);
+    } else if (event_type === 'error') {
+        updateLastLog('error', message, { error });
+    }
+}
+
+// 更新进度条
+function updateProgressBar(percent) {
+    progressBar.style.width = `${percent}%`;
+    progressPercent.textContent = `${Math.round(percent)}%`;
+}
+
+// 添加进度日志
+function addProgressLog(message, status = 'waiting', agentName = null) {
+    const logItem = document.createElement('div');
+    logItem.className = `progress-log-item ${status}`;
+    logItem.dataset.agent = agentName || 'unknown';
+    
+    const icon = getIconForStatus(status);
+    
+    logItem.innerHTML = `
+        <div class="progress-log-icon">${icon}</div>
+        <div class="progress-log-content">
+            <div class="progress-log-message">${escapeHtml(message)}</div>
+        </div>
+    `;
+    
+    progressLogs.appendChild(logItem);
+    scrollToBottom();
+}
+
+// 更新最后一条日志
+function updateLastLog(status, message, details = null, durationMs = null) {
+    const lastLog = progressLogs.lastElementChild;
+    if (!lastLog) return;
+    
+    // 更新状态类
+    lastLog.className = `progress-log-item ${status}`;
+    
+    // 更新图标
+    const iconEl = lastLog.querySelector('.progress-log-icon');
+    if (iconEl) {
+        iconEl.textContent = getIconForStatus(status);
+    }
+    
+    // 更新消息
+    const messageEl = lastLog.querySelector('.progress-log-message');
+    if (messageEl) {
+        messageEl.textContent = message;
+    }
+    
+    // 添加详情
+    if (details || durationMs) {
+        const detailsDiv = document.createElement('div');
+        detailsDiv.className = 'progress-log-details';
+        
+        let detailsHtml = '';
+        
+        // 添加耗时
+        if (durationMs !== null && durationMs !== undefined) {
+            detailsHtml += `<span class="progress-log-duration">耗时：${(durationMs / 1000).toFixed(1)}s</span>`;
+        }
+        
+        // 添加详情数据
+        if (details) {
+            const detailItems = [];
+            if (details.workflow_type) {
+                detailItems.push(`类型：${details.workflow_type}`);
+            }
+            if (details.tools_count !== undefined) {
+                detailItems.push(`工具数：${details.tools_count}`);
+            }
+            if (details.knowledge_count !== undefined) {
+                detailItems.push(`知识库数：${details.knowledge_count}`);
+            }
+            if (details.selected_tools && details.selected_tools.length > 0) {
+                const toolNames = details.selected_tools.map(t => t.name).join(', ');
+                detailItems.push(`工具：${toolNames}`);
+            }
+            if (details.matched_knowledge_bases && details.matched_knowledge_bases.length > 0) {
+                const kbNames = details.matched_knowledge_bases.map(k => k.name).join(', ');
+                detailItems.push(`知识库：${kbNames}`);
+            }
+            if (details.error) {
+                detailItems.push(`错误：${details.error}`);
+            }
+            
+            if (detailItems.length > 0) {
+                detailsHtml += '<br>' + detailItems.join(' | ');
+            }
+        }
+        
+        detailsDiv.innerHTML = detailsHtml;
+        lastLog.querySelector('.progress-log-content').appendChild(detailsDiv);
+    }
+    
+    scrollToBottom();
+}
+
+// 获取状态图标
+function getIconForStatus(status) {
+    const icons = {
+        'waiting': '⏳',
+        'running': '⚙️',
+        'success': '✅',
+        'error': '❌'
+    };
+    return icons[status] || '•';
+}
+
+// 滚动到底部
+function scrollToBottom() {
+    progressLogs.scrollTop = progressLogs.scrollHeight;
+}
+
+// HTML 转义
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 隐藏进度区域
+function hideProgress() {
+    progressSection.style.display = 'none';
+    progressLogs.innerHTML = '';
+    progressBar.style.width = '0%';
+    progressPercent.textContent = '0%';
+}
+
+// 显示加载动画
+function showLoading() {
+    loading.style.display = 'block';
+    generateBtn.querySelector('.btn-text').style.display = 'none';
+    generateBtn.querySelector('.btn-loading').style.display = 'inline';
+}
+
+// 隐藏加载动画
+function hideLoading() {
+    loading.style.display = 'none';
+    generateBtn.querySelector('.btn-text').style.display = 'inline';
+    generateBtn.querySelector('.btn-loading').style.display = 'none';
+}
+
+// 禁用生成按钮
+function disableGenerateBtn(disabled) {
+    generateBtn.disabled = disabled;
+}
+
+// 显示错误
+function showError(message) {
+    error.textContent = message;
+    error.style.display = 'block';
+}
+
+// 隐藏错误
+function hideError() {
+    error.style.display = 'none';
+}
+
+// 显示结果
+function showResult(data) {
+    currentWorkflow = data.workflow;
+    currentFilename = data.file_path ? data.file_path.split('/').pop() : null;
+
+    // 显示元数据
+    if (data.metadata) {
+        let metadataHtml = '';
+        
+        if (data.metadata.intent) {
+            metadataHtml += `
+                <div class="metadata-item">
+                    <span class="metadata-label">工作流类型:</span>
+                    <span class="metadata-value">${data.metadata.intent.workflow_type || '未知'}</span>
+                </div>
+            `;
+        }
+        
+        if (data.metadata.tools_count !== undefined) {
+            metadataHtml += `
+                <div class="metadata-item">
+                    <span class="metadata-label">选中工具数:</span>
+                    <span class="metadata-value">${data.metadata.tools_count}</span>
+                </div>
+            `;
+        }
+        
+        if (data.metadata.knowledge_count !== undefined) {
+            metadataHtml += `
+                <div class="metadata-item">
+                    <span class="metadata-label">匹配知识库数:</span>
+                    <span class="metadata-value">${data.metadata.knowledge_count}</span>
+                </div>
+            `;
+        }
+        
+        metadata.innerHTML = metadataHtml;
+    }
+
+    // 显示 JSON
+    if (data.workflow) {
+        jsonContent.textContent = JSON.stringify(data.workflow, null, 2);
+    }
+
+    // 显示结果区域
+    result.style.display = 'block';
+    
+    // 滚动到结果区域
+    result.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    // 刷新历史列表
+    loadHistory();
+}
+
+// 隐藏结果
+function hideResult() {
+    result.style.display = 'none';
+    currentWorkflow = null;
+    currentFilename = null;
+}
+
+// 处理下载
+function handleDownload() {
+    if (!currentWorkflow || !currentFilename) {
+        showError('没有可下载的工作流');
+        return;
+    }
+
+    // 创建下载链接
+    const blob = new Blob([JSON.stringify(currentWorkflow, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = currentFilename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showToast('下载成功！');
+}
+
+// 处理复制
+async function handleCopy() {
+    if (!currentWorkflow) {
+        showError('没有可复制的内容');
+        return;
+    }
+
+    try {
+        await navigator.clipboard.writeText(JSON.stringify(currentWorkflow, null, 2));
+        showToast('已复制到剪贴板！');
+    } catch (err) {
+        console.error('复制失败:', err);
+        showError('复制失败，请手动复制');
+    }
+}
+
+// 处理切换 JSON 显示
+function handleToggleJson() {
+    jsonContent.parentElement.classList.toggle('collapsed');
+}
+
+// 加载历史工作流列表
+async function loadHistory() {
+    try {
+        const response = await fetch('/api/workflows');
+        if (!response.ok) {
+            throw new Error('加载失败');
+        }
+
+        const workflows = await response.json();
+        
+        if (workflows.length === 0) {
+            historyList.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 2rem;">暂无历史工作流</p>';
+            return;
+        }
+
+        historyList.innerHTML = workflows.map(wf => {
+            const date = new Date(wf.created_at * 1000);
+            const dateStr = date.toLocaleString('zh-CN');
+            const sizeStr = (wf.size / 1024).toFixed(2) + ' KB';
+            
+            return `
+                <div class="history-item">
+                    <div class="history-info">
+                        <div class="history-filename">${wf.filename}</div>
+                        <div class="history-meta">
+                            创建时间：${dateStr} | 大小：${sizeStr}
+                        </div>
+                    </div>
+                    <div class="history-actions">
+                        <button class="btn btn-sm btn-secondary" onclick="viewWorkflow('${wf.filename}')">查看</button>
+                        <button class="btn btn-sm btn-success" onclick="downloadWorkflow('${wf.filename}')">下载</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (err) {
+        console.error('加载历史失败:', err);
+        historyList.innerHTML = `<p style="color: var(--error-color); text-align: center; padding: 2rem;">加载失败：${err.message}</p>`;
+    }
+}
+
+// 查看工作流（全局函数）
+async function viewWorkflow(filename) {
+    try {
+        const response = await fetch(`/api/workflow/${filename}`);
+        if (!response.ok) {
+            throw new Error('加载失败');
+        }
+
+        const data = await response.json();
+        
+        // 显示工作流
+        currentWorkflow = data.workflow;
+        currentFilename = data.filename;
+        
+        jsonContent.textContent = JSON.stringify(data.workflow, null, 2);
+        result.style.display = 'block';
+        result.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        
+        showToast('工作流加载成功！');
+    } catch (err) {
+        console.error('查看失败:', err);
+        showError(`查看失败：${err.message}`);
+    }
+}
+
+// 下载工作流（全局函数）
+async function downloadWorkflow(filename) {
+    try {
+        const response = await fetch(`/api/download/${filename}`);
+        if (!response.ok) {
+            throw new Error('下载失败');
+        }
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showToast('下载成功！');
+    } catch (err) {
+        console.error('下载失败:', err);
+        showError(`下载失败：${err.message}`);
+    }
+}
+
+// 显示成功提示
+function showToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.remove();
+    }, 3000);
+}
+
+// 将函数暴露到全局作用域
+window.viewWorkflow = viewWorkflow;
+window.downloadWorkflow = downloadWorkflow;

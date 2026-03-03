@@ -1,0 +1,1234 @@
+{
+  "status": 2,
+  "user_id": 1,
+  "description": "智能助手工作流，支持天气查询、招商政策及海洋政策获取功能",
+  "name": "智能政策与天气助手",
+  "flow_type": 10,
+  "id": "a7b3c9d4e5f6g7h8i9j0k1l2m3n4o5p6",
+  "nodes": [
+    {
+      "id": "start_a7b3c",
+      "data": {
+        "v": "3",
+        "id": "start_a7b3c",
+        "name": "开始",
+        "type": "start",
+        "description": "工作流运行的起始节点，提供开场引导和全局变量配置。",
+        "group_params": [
+          {
+            "name": "开场引导",
+            "params": [
+              {
+                "key": "guide_word",
+                "type": "textarea",
+                "label": "true",
+                "value": "您好！我是智能助手，可以为您提供天气查询、招商引资政策咨询以及海洋产业政策查询服务。请问有什么可以帮您？",
+                "placeholder": "true"
+              },
+              {
+                "key": "guide_question",
+                "type": "input_list",
+                "label": "true",
+                "value": [
+                  "查询今天天气",
+                  "了解招商引资政策",
+                  "获取海洋产业政策",
+                  "深汕合作区有哪些优惠政策"
+                ],
+                "placeholder": "true"
+              }
+            ]
+          },
+          {
+            "name": "全局变量",
+            "params": [
+              {
+                "key": "user_info",
+                "type": "var",
+                "label": "true",
+                "value": "",
+                "global": "key"
+              },
+              {
+                "key": "current_time",
+                "type": "var",
+                "label": "true",
+                "value": "",
+                "global": "key"
+              },
+              {
+                "key": "chat_history",
+                "type": "chat_history_num",
+                "value": 10,
+                "global": "key"
+              },
+              {
+                "key": "preset_question",
+                "help": "true",
+                "type": "input_list",
+                "label": "true",
+                "value": [
+                  {
+                    "key": "pq_001",
+                    "value": "查询今天天气"
+                  },
+                  {
+                    "key": "pq_002",
+                    "value": "了解招商引资政策"
+                  },
+                  {
+                    "key": "pq_003",
+                    "value": "获取海洋产业政策"
+                  },
+                  {
+                    "key": "pq_004",
+                    "value": "深汕合作区有哪些优惠政策"
+                  }
+                ],
+                "global": "item:input_list",
+                "placeholder": "true"
+              },
+              {
+                "key": "custom_variables",
+                "help": "true",
+                "type": "global_var",
+                "label": "true",
+                "value": [],
+                "global": "item:input_list"
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": -200,
+        "y": 282
+      },
+      "measured": {
+        "width": 334,
+        "height": 600
+      }
+    },
+    {
+      "id": "input_b9d4e",
+      "data": {
+        "v": "3",
+        "id": "input_b9d4e",
+        "name": "输入",
+        "type": "input",
+        "description": "接收用户在会话页面的输入内容。",
+        "tab": {
+          "value": "dialog_input",
+          "options": [
+            {
+              "key": "dialog_input",
+              "help": "true",
+              "label": "true"
+            },
+            {
+              "key": "form_input",
+              "help": "true",
+              "label": "true"
+            }
+          ]
+        },
+        "group_params": [
+          {
+            "name": "接收文本",
+            "params": [
+              {
+                "key": "user_input",
+                "tab": "dialog_input",
+                "type": "var",
+                "label": "true",
+                "global": "key",
+                "value": ""
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 634,
+        "y": 382
+      },
+      "measured": {
+        "width": 334,
+        "height": 268
+      }
+    },
+    {
+      "id": "llm_intent_c5f2a",
+      "data": {
+        "v": "2",
+        "id": "llm_intent_c5f2a",
+        "name": "意图识别",
+        "type": "llm",
+        "description": "分析用户输入，识别用户意图类型（天气查询、招商政策、海洋政策）。",
+        "tab": {
+          "value": "single",
+          "options": [
+            {
+              "key": "single",
+              "help": "true",
+              "label": "true"
+            },
+            {
+              "key": "batch",
+              "help": "true",
+              "label": "true"
+            }
+          ]
+        },
+        "group_params": [
+          {
+            "name": "模型设置",
+            "params": [
+              {
+                "key": "model_id",
+                "type": "bisheng_model",
+                "label": "true",
+                "value": 5,
+                "required": true,
+                "placeholder": "true"
+              },
+              {
+                "key": "temperature",
+                "step": 0.1,
+                "type": "slide",
+                "label": "true",
+                "scope": [
+                  0,
+                  2
+                ],
+                "value": 0.3
+              }
+            ]
+          },
+          {
+            "name": "提示词",
+            "params": [
+              {
+                "key": "system_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "你是一个意图识别助手。请分析用户的输入，判断其意图类型。\n\n意图分类：\n1. WEATHER_QUERY - 天气查询（用户询问天气、气温、降水等）\n2. INVESTMENT_POLICY - 招商引资政策（用户询问招商、投资、企业扶持等政策）\n3. OCEAN_POLICY - 海洋产业政策（用户询问海洋产业、海洋经济、深汕海洋等相关政策）\n\n请只返回格式：INTENT: [意图类型]"
+              },
+              {
+                "key": "user_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "用户问题：{{#input_b9d4e.user_input#}}",
+                "required": true
+              }
+            ]
+          },
+          {
+            "name": "输出",
+            "params": [
+              {
+                "key": "output_user",
+                "help": "true",
+                "type": "switch",
+                "label": "true",
+                "value": true
+              },
+              {
+                "key": "output",
+                "help": "true",
+                "type": "var",
+                "label": "true",
+                "value": [],
+                "global": "code:value.map(el => ({ label: el.label, value: el.key }))"
+              },
+              {
+                "key": "batch_variable",
+                "tab": "batch",
+                "help": "true",
+                "test": "var",
+                "type": "user_question",
+                "label": "true",
+                "value": [],
+                "global": "self",
+                "linkage": "output",
+                "required": true,
+                "placeholder": "true"
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 1468,
+        "y": 109
+      },
+      "measured": {
+        "width": 334,
+        "height": 700
+      }
+    },
+    {
+      "id": "condition_d8e1b",
+      "data": {
+        "v": "1",
+        "id": "condition_d8e1b",
+        "name": "意图分支",
+        "type": "condition",
+        "description": "根据意图识别结果，分发到不同的处理流程。",
+        "group_params": [
+          {
+            "params": [
+              {
+                "key": "condition",
+                "type": "condition",
+                "label": "true",
+                "value": [
+                  {
+                    "id": "weather_branch",
+                    "operator": "or",
+                    "conditions": [
+                      {
+                        "id": "cond_weather_1",
+                        "left_var": "llm_intent_c5f2a.output",
+                        "left_label": "意图识别/output",
+                        "right_value": "WEATHER_QUERY",
+                        "right_value_type": "input",
+                        "comparison_operation": "contains"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "investment_branch",
+                    "operator": "or",
+                    "conditions": [
+                      {
+                        "id": "cond_invest_1",
+                        "left_var": "llm_intent_c5f2a.output",
+                        "left_label": "意图识别/output",
+                        "right_value": "INVESTMENT_POLICY",
+                        "right_value_type": "input",
+                        "comparison_operation": "contains"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "ocean_branch",
+                    "operator": "or",
+                    "conditions": [
+                      {
+                        "id": "cond_ocean_1",
+                        "left_var": "llm_intent_c5f2a.output",
+                        "left_label": "意图识别/output",
+                        "right_value": "OCEAN_POLICY",
+                        "right_value_type": "input",
+                        "comparison_operation": "contains"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "default_branch",
+                    "operator": "or",
+                    "conditions": []
+                  }
+                ],
+                "required": true
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 2302,
+        "y": 600
+      },
+      "measured": {
+        "width": 562,
+        "height": 548
+      }
+    },
+    {
+      "id": "tool_weather_e3a9f",
+      "data": {
+        "id": "tool_weather_e3a9f",
+        "name": "天气查询",
+        "type": "tool",
+        "tool_key": "web_search",
+        "description": "使用联网搜索查询天气信息。",
+        "group_params": [
+          {
+            "name": "工具参数",
+            "params": [
+              {
+                "key": "query",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "{{#input_b9d4e.user_input#}}",
+                "required": true,
+                "placeholder": "true"
+              }
+            ]
+          },
+          {
+            "name": "输出",
+            "params": [
+              {
+                "key": "output",
+                "type": "var",
+                "label": "true",
+                "global": "key",
+                "value": ""
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 3136,
+        "y": 109
+      },
+      "measured": {
+        "width": 334,
+        "height": 430
+      }
+    },
+    {
+      "id": "knowledge_invest_f7c2d",
+      "data": {
+        "v": "2",
+        "id": "knowledge_invest_f7c2d",
+        "name": "招商政策检索",
+        "type": "knowledge_retriever",
+        "description": "从招商引资政策知识库中检索相关政策内容。",
+        "group_params": [
+          {
+            "name": "知识库检索设置",
+            "params": [
+              {
+                "key": "user_question",
+                "type": "user_question",
+                "label": "true",
+                "value": [
+                  "input_b9d4e.user_input"
+                ],
+                "required": true
+              },
+              {
+                "key": "knowledge",
+                "type": "knowledge_select_multi",
+                "label": "true",
+                "value": {
+                  "type": "knowledge",
+                  "value": [
+                    {
+                      "key": 6,
+                      "label": "招商引资相关政策"
+                    }
+                  ]
+                },
+                "required": true
+              },
+              {
+                "key": "metadata_filter",
+                "type": "metadata_filter",
+                "label": "true",
+                "value": {
+                  "enabled": false
+                }
+              },
+              {
+                "key": "advanced_retrieval_switch",
+                "type": "search_switch",
+                "label": "true",
+                "value": {
+                  "keyword_weight": 0.4,
+                  "vector_weight": 0.6,
+                  "user_auth": false,
+                  "search_switch": true,
+                  "rerank_flag": false,
+                  "rerank_model": "",
+                  "max_chunk_size": 15000
+                }
+              }
+            ]
+          },
+          {
+            "name": "输出",
+            "params": [
+              {
+                "key": "retrieved_result",
+                "type": "var",
+                "label": "true",
+                "value": [
+                  {
+                    "key": "retrieved_output",
+                    "label": "检索结果"
+                  }
+                ],
+                "global": "code:value.map(el => ({ label: el.label, value: el.key }))"
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 3136,
+        "y": 882
+      },
+      "measured": {
+        "width": 334,
+        "height": 600
+      }
+    },
+    {
+      "id": "knowledge_ocean_h2i5j",
+      "data": {
+        "v": "2",
+        "id": "knowledge_ocean_h2i5j",
+        "name": "海洋政策检索",
+        "type": "knowledge_retriever",
+        "description": "从深汕海洋产业知识库中检索相关政策内容。",
+        "group_params": [
+          {
+            "name": "知识库检索设置",
+            "params": [
+              {
+                "key": "user_question",
+                "type": "user_question",
+                "label": "true",
+                "value": [
+                  "input_b9d4e.user_input"
+                ],
+                "required": true
+              },
+              {
+                "key": "knowledge",
+                "type": "knowledge_select_multi",
+                "label": "true",
+                "value": {
+                  "type": "knowledge",
+                  "value": [
+                    {
+                      "key": 7,
+                      "label": "深汕海洋产业"
+                    }
+                  ]
+                },
+                "required": true
+              },
+              {
+                "key": "metadata_filter",
+                "type": "metadata_filter",
+                "label": "true",
+                "value": {
+                  "enabled": false
+                }
+              },
+              {
+                "key": "advanced_retrieval_switch",
+                "type": "search_switch",
+                "label": "true",
+                "value": {
+                  "keyword_weight": 0.4,
+                  "vector_weight": 0.6,
+                  "user_auth": false,
+                  "search_switch": true,
+                  "rerank_flag": false,
+                  "rerank_model": "",
+                  "max_chunk_size": 15000
+                }
+              }
+            ]
+          },
+          {
+            "name": "输出",
+            "params": [
+              {
+                "key": "retrieved_result",
+                "type": "var",
+                "label": "true",
+                "value": [
+                  {
+                    "key": "retrieved_output",
+                    "label": "检索结果"
+                  }
+                ],
+                "global": "code:value.map(el => ({ label: el.label, value: el.key }))"
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 3136,
+        "y": 1655
+      },
+      "measured": {
+        "width": 334,
+        "height": 600
+      }
+    },
+    {
+      "id": "llm_weather_g4h8i",
+      "data": {
+        "v": "2",
+        "id": "llm_weather_g4h8i",
+        "name": "天气回答生成",
+        "type": "llm",
+        "description": "根据天气查询结果生成友好的回答。",
+        "tab": {
+          "value": "single",
+          "options": [
+            {
+              "key": "single",
+              "help": "true",
+              "label": "true"
+            },
+            {
+              "key": "batch",
+              "help": "true",
+              "label": "true"
+            }
+          ]
+        },
+        "group_params": [
+          {
+            "name": "模型设置",
+            "params": [
+              {
+                "key": "model_id",
+                "type": "bisheng_model",
+                "label": "true",
+                "value": 5,
+                "required": true,
+                "placeholder": "true"
+              },
+              {
+                "key": "temperature",
+                "step": 0.1,
+                "type": "slide",
+                "label": "true",
+                "scope": [
+                  0,
+                  2
+                ],
+                "value": 0.3
+              }
+            ]
+          },
+          {
+            "name": "提示词",
+            "params": [
+              {
+                "key": "system_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "你是一个友好的天气助手。请根据搜索到的天气信息，为用户提供清晰、实用的天气查询结果，包括温度、降水概率、风力等信息，并给出适当的出行建议。"
+              },
+              {
+                "key": "user_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "用户问题：{{#input_b9d4e.user_input#}}\n\n搜索结果：{{#tool_weather_e3a9f.output#}}\n\n请根据以上信息生成回答：",
+                "required": true
+              }
+            ]
+          },
+          {
+            "name": "输出",
+            "params": [
+              {
+                "key": "output_user",
+                "help": "true",
+                "type": "switch",
+                "label": "true",
+                "value": true
+              },
+              {
+                "key": "output",
+                "help": "true",
+                "type": "var",
+                "label": "true",
+                "value": [],
+                "global": "code:value.map(el => ({ label: el.label, value: el.key }))"
+              },
+              {
+                "key": "batch_variable",
+                "tab": "batch",
+                "help": "true",
+                "test": "var",
+                "type": "user_question",
+                "label": "true",
+                "value": [],
+                "global": "self",
+                "linkage": "output",
+                "required": true,
+                "placeholder": "true"
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 3970,
+        "y": 109
+      },
+      "measured": {
+        "width": 334,
+        "height": 700
+      }
+    },
+    {
+      "id": "llm_invest_i6j7k",
+      "data": {
+        "v": "2",
+        "id": "llm_invest_i6j7k",
+        "name": "招商政策回答生成",
+        "type": "llm",
+        "description": "根据招商政策检索结果生成专业的政策解答。",
+        "tab": {
+          "value": "single",
+          "options": [
+            {
+              "key": "single",
+              "help": "true",
+              "label": "true"
+            },
+            {
+              "key": "batch",
+              "help": "true",
+              "label": "true"
+            }
+          ]
+        },
+        "group_params": [
+          {
+            "name": "模型设置",
+            "params": [
+              {
+                "key": "model_id",
+                "type": "bisheng_model",
+                "label": "true",
+                "value": 5,
+                "required": true,
+                "placeholder": "true"
+              },
+              {
+                "key": "temperature",
+                "step": 0.1,
+                "type": "slide",
+                "label": "true",
+                "scope": [
+                  0,
+                  2
+                ],
+                "value": 0.3
+              }
+            ]
+          },
+          {
+            "name": "提示词",
+            "params": [
+              {
+                "key": "system_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "你是一个专业的招商引资政策顾问。请根据检索到的政策内容，为用户提供准确、清晰的政策解读，包括政策要点、适用条件、申请流程等信息。回答要专业、条理清晰。"
+              },
+              {
+                "key": "user_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "用户问题：{{#input_b9d4e.user_input#}}\n\n检索到的政策内容：{{#knowledge_invest_f7c2d.retrieved_result#}}\n\n请根据以上信息生成专业回答：",
+                "required": true
+              }
+            ]
+          },
+          {
+            "name": "输出",
+            "params": [
+              {
+                "key": "output_user",
+                "help": "true",
+                "type": "switch",
+                "label": "true",
+                "value": true
+              },
+              {
+                "key": "output",
+                "help": "true",
+                "type": "var",
+                "label": "true",
+                "value": [],
+                "global": "code:value.map(el => ({ label: el.label, value: el.key }))"
+              },
+              {
+                "key": "batch_variable",
+                "tab": "batch",
+                "help": "true",
+                "test": "var",
+                "type": "user_question",
+                "label": "true",
+                "value": [],
+                "global": "self",
+                "linkage": "output",
+                "required": true,
+                "placeholder": "true"
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 3970,
+        "y": 882
+      },
+      "measured": {
+        "width": 334,
+        "height": 700
+      }
+    },
+    {
+      "id": "llm_ocean_k8l9m",
+      "data": {
+        "v": "2",
+        "id": "llm_ocean_k8l9m",
+        "name": "海洋政策回答生成",
+        "type": "llm",
+        "description": "根据海洋政策检索结果生成专业的政策解答。",
+        "tab": {
+          "value": "single",
+          "options": [
+            {
+              "key": "single",
+              "help": "true",
+              "label": "true"
+            },
+            {
+              "key": "batch",
+              "help": "true",
+              "label": "true"
+            }
+          ]
+        },
+        "group_params": [
+          {
+            "name": "模型设置",
+            "params": [
+              {
+                "key": "model_id",
+                "type": "bisheng_model",
+                "label": "true",
+                "value": 5,
+                "required": true,
+                "placeholder": "true"
+              },
+              {
+                "key": "temperature",
+                "step": 0.1,
+                "type": "slide",
+                "label": "true",
+                "scope": [
+                  0,
+                  2
+                ],
+                "value": 0.3
+              }
+            ]
+          },
+          {
+            "name": "提示词",
+            "params": [
+              {
+                "key": "system_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "你是一个专业的海洋产业政策顾问。请根据检索到的政策内容，为用户提供准确、清晰的海洋产业政策解读，包括产业方向、扶持政策、发展规划等信息。回答要专业、条理清晰。"
+              },
+              {
+                "key": "user_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "用户问题：{{#input_b9d4e.user_input#}}\n\n检索到的政策内容：{{#knowledge_ocean_h2i5j.retrieved_result#}}\n\n请根据以上信息生成专业回答：",
+                "required": true
+              }
+            ]
+          },
+          {
+            "name": "输出",
+            "params": [
+              {
+                "key": "output_user",
+                "help": "true",
+                "type": "switch",
+                "label": "true",
+                "value": true
+              },
+              {
+                "key": "output",
+                "help": "true",
+                "type": "var",
+                "label": "true",
+                "value": [],
+                "global": "code:value.map(el => ({ label: el.label, value: el.key }))"
+              },
+              {
+                "key": "batch_variable",
+                "tab": "batch",
+                "help": "true",
+                "test": "var",
+                "type": "user_question",
+                "label": "true",
+                "value": [],
+                "global": "self",
+                "linkage": "output",
+                "required": true,
+                "placeholder": "true"
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 3970,
+        "y": 1655
+      },
+      "measured": {
+        "width": 334,
+        "height": 700
+      }
+    },
+    {
+      "id": "llm_default_m0n1o",
+      "data": {
+        "v": "2",
+        "id": "llm_default_m0n1o",
+        "name": "通用问答",
+        "type": "llm",
+        "description": "处理未匹配到特定意图的通用问答。",
+        "tab": {
+          "value": "single",
+          "options": [
+            {
+              "key": "single",
+              "help": "true",
+              "label": "true"
+            },
+            {
+              "key": "batch",
+              "help": "true",
+              "label": "true"
+            }
+          ]
+        },
+        "group_params": [
+          {
+            "name": "模型设置",
+            "params": [
+              {
+                "key": "model_id",
+                "type": "bisheng_model",
+                "label": "true",
+                "value": 5,
+                "required": true,
+                "placeholder": "true"
+              },
+              {
+                "key": "temperature",
+                "step": 0.1,
+                "type": "slide",
+                "label": "true",
+                "scope": [
+                  0,
+                  2
+                ],
+                "value": 0.3
+              }
+            ]
+          },
+          {
+            "name": "提示词",
+            "params": [
+              {
+                "key": "system_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "你是一个智能助手，主要提供天气查询、招商引资政策和海洋产业政策咨询服务。如果用户的问题不属于这些范围，请友好地告知用户你的服务范围，并引导用户提出相关问题。"
+              },
+              {
+                "key": "user_prompt",
+                "test": "var",
+                "type": "var_textarea",
+                "label": "true",
+                "value": "用户问题：{{#input_b9d4e.user_input#}}\n\n请根据以上信息生成回答：",
+                "required": true
+              }
+            ]
+          },
+          {
+            "name": "输出",
+            "params": [
+              {
+                "key": "output_user",
+                "help": "true",
+                "type": "switch",
+                "label": "true",
+                "value": true
+              },
+              {
+                "key": "output",
+                "help": "true",
+                "type": "var",
+                "label": "true",
+                "value": [],
+                "global": "code:value.map(el => ({ label: el.label, value: el.key }))"
+              },
+              {
+                "key": "batch_variable",
+                "tab": "batch",
+                "help": "true",
+                "test": "var",
+                "type": "user_question",
+                "label": "true",
+                "value": [],
+                "global": "self",
+                "linkage": "output",
+                "required": true,
+                "placeholder": "true"
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 3970,
+        "y": 2428
+      },
+      "measured": {
+        "width": 334,
+        "height": 700
+      }
+    },
+    {
+      "id": "output_n2p3q",
+      "data": {
+        "v": "2",
+        "id": "output_n2p3q",
+        "name": "输出",
+        "type": "output",
+        "description": "向用户发送最终回答结果。",
+        "group_params": [
+          {
+            "params": [
+              {
+                "key": "message",
+                "type": "var_textarea_file",
+                "label": "true",
+                "value": {
+                  "msg": "{{#llm_weather_g4h8i.output#}}",
+                  "files": []
+                },
+                "varZh": {
+                  "llm_weather_g4h8i.output": "天气回答生成/output",
+                  "llm_invest_i6j7k.output": "招商政策回答生成/output",
+                  "llm_ocean_k8l9m.output": "海洋政策回答生成/output",
+                  "llm_default_m0n1o.output": "通用问答/output"
+                },
+                "global": "key",
+                "required": true,
+                "placeholder": "true"
+              },
+              {
+                "key": "output_result",
+                "type": "output_form",
+                "label": "用户输入内容",
+                "value": {
+                  "type": "",
+                  "value": ""
+                },
+                "global": "value.type=input",
+                "options": [],
+                "required": false
+              }
+            ]
+          }
+        ]
+      },
+      "type": "flowNode",
+      "position": {
+        "x": 4804,
+        "y": 600
+      },
+      "measured": {
+        "width": 334,
+        "height": 465
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "xy-edge__start_a7b3cright_handle-input_b9d4eleft_handle",
+      "type": "customEdge",
+      "source": "start_a7b3c",
+      "target": "input_b9d4e",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__input_b9d4eright_handle-llm_intent_c5f2aleft_handle",
+      "type": "customEdge",
+      "source": "input_b9d4e",
+      "target": "llm_intent_c5f2a",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__llm_intent_c5f2aright_handle-condition_d8e1bleft_handle",
+      "type": "customEdge",
+      "source": "llm_intent_c5f2a",
+      "target": "condition_d8e1b",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__condition_d8e1bweather_branch-tool_weather_e3a9fleft_handle",
+      "type": "customEdge",
+      "source": "condition_d8e1b",
+      "target": "tool_weather_e3a9f",
+      "sourceHandle": "weather_branch",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__condition_d8e1binvestment_branch-knowledge_invest_f7c2dleft_handle",
+      "type": "customEdge",
+      "source": "condition_d8e1b",
+      "target": "knowledge_invest_f7c2d",
+      "sourceHandle": "investment_branch",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__condition_d8e1bocean_branch-knowledge_ocean_h2i5jleft_handle",
+      "type": "customEdge",
+      "source": "condition_d8e1b",
+      "target": "knowledge_ocean_h2i5j",
+      "sourceHandle": "ocean_branch",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__condition_d8e1bdefault_branch-llm_default_m0n1oleft_handle",
+      "type": "customEdge",
+      "source": "condition_d8e1b",
+      "target": "llm_default_m0n1o",
+      "sourceHandle": "default_branch",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__tool_weather_e3a9fright_handle-llm_weather_g4h8ileft_handle",
+      "type": "customEdge",
+      "source": "tool_weather_e3a9f",
+      "target": "llm_weather_g4h8i",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__knowledge_invest_f7c2dright_handle-llm_invest_i6j7kleft_handle",
+      "type": "customEdge",
+      "source": "knowledge_invest_f7c2d",
+      "target": "llm_invest_i6j7k",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__knowledge_ocean_h2i5jright_handle-llm_ocean_k8l9mleft_handle",
+      "type": "customEdge",
+      "source": "knowledge_ocean_h2i5j",
+      "target": "llm_ocean_k8l9m",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__llm_weather_g4h8iright_handle-output_n2p3qleft_handle",
+      "type": "customEdge",
+      "source": "llm_weather_g4h8i",
+      "target": "output_n2p3q",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__llm_invest_i6j7kright_handle-output_n2p3qleft_handle",
+      "type": "customEdge",
+      "source": "llm_invest_i6j7k",
+      "target": "output_n2p3q",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__llm_ocean_k8l9mright_handle-output_n2p3qleft_handle",
+      "type": "customEdge",
+      "source": "llm_ocean_k8l9m",
+      "target": "output_n2p3q",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__llm_default_m0n1oright_handle-output_n2p3qleft_handle",
+      "type": "customEdge",
+      "source": "llm_default_m0n1o",
+      "target": "output_n2p3q",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    },
+    {
+      "id": "xy-edge__output_n2p3qright_handle-input_b9d4eleft_handle",
+      "type": "customEdge",
+      "source": "output_n2p3q",
+      "target": "input_b9d4e",
+      "sourceHandle": "right_handle",
+      "targetHandle": "left_handle",
+      "animated": true
+    }
+  ],
+  "viewport": {
+    "x": 400,
+    "y": 300,
+    "zoom": 0.5
+  },
+  "guide_word": "您好！我是智能助手，可以为您提供天气查询、招商引资政策咨询以及海洋产业政策查询服务。请问有什么可以帮您？",
+  "create_time": "2026-03-03T13:37:21",
+  "update_time": "2026-03-03T13:37:21",
+  "logo": ""
+}

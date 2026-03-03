@@ -1,0 +1,20 @@
+# 毕昇工作流生成器依赖
+
+# Web 框架
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+
+# LangChain 相关
+langchain==0.1.0
+langchain-openai==0.0.5
+langchain-community==0.0.10
+langgraph==0.0.28
+
+# 数据验证
+pydantic==2.5.3
+
+# HTTP 客户端
+httpx==0.26.0
+
+# 其他工具
+python-dotenv==1.0.0

@@ -133,9 +133,11 @@ class UserAgent:
 
         try:
             result = json.loads(response.content)
-        except:
-            # 解析失败时使用默认值
-            logger.warning("LLM 响应 JSON 解析失败，使用默认值")
+        except Exception as e:
+            # 解析失败时记录详细错误信息
+            logger.error(f"LLM 响应 JSON 解析失败：{str(e)}")
+            logger.error(f"LLM 原始响应内容：{response.content}")
+            logger.warning("使用默认值")
             result = {}
 
         # 创建 EnhancedIntent
