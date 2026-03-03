@@ -6,14 +6,13 @@
 
 ```
 bisheng-workflow-generator/
-├── SKILL.md                          # 主文件（1224 行）
+├── SKILL.md                          # 主文件（约 520 行，已精简）
 ├── README.md                         # 本文件
 ├── examples/                         # 示例工作流
 │   ├── example-simple-qa.json        # 简单问答工作流
 │   └── example-knowledge-retrieval.json  # 知识库检索工作流
-└── references/                       # 详细参考文档
-    ├── workflow-structure.md         # 工作流结构详解（729 行）
-    └── field-format-spec.md          # 字段格式规范（重要）
+└── references/                       # 参考文档
+    └── field-format-spec.md          # 字段格式规范（约 360 行，已精简）
 ```
 
 ## 快速开始
@@ -45,10 +44,11 @@ bisheng-workflow-generator/
 ## 核心功能
 
 - ✅ 完整工作流生成：自动生成包含 nodes、edges 的完整 JSON 文件
-- ✅ 多节点支持：支持所有毕昇节点类型
+- ✅ 多节点支持：支持 start、input、output、llm、condition、knowledge_retriever、tool 等节点
 - ✅ 智能连接：自动生成节点间的 edges 连接关系
 - ✅ 参数配置：智能推荐模型参数、提示词配置
 - ✅ 规范格式：严格遵循毕昇工作流 JSON 规范
+- ✅ 动态布局：根据节点高度动态计算布局，避免重叠
 
 ## 支持的节点类型
 
@@ -60,10 +60,8 @@ bisheng-workflow-generator/
 | `llm` | 大语言模型节点 | 否 |
 | `condition` | 条件判断节点 | 否 |
 | `knowledge_retriever` | 知识库检索节点 | 否 |
-| `rag` | RAG 检索节点 | 否 |
 | `tool` | 工具节点 | 否 |
 | `code` | 代码执行节点 | 否 |
-| `agent` | Agent 节点 | 否 |
 
 ## 常见错误
 
@@ -80,52 +78,51 @@ bisheng-workflow-generator/
 
 ## 文档说明
 
-### SKILL.md
+### SKILL.md（主文档）
 
-主文档，包含：
+**精简后约 520 行**（原 734 行，精简 30%），包含：
 - 核心功能介绍
 - 使用方法
 - JSON 结构详解
-- 所有节点类型详解
+- 所有节点类型详解（精简示例）
 - Edges 边连接定义
 - Position 布局规则
-- 实际案例（4 个）
-- 常用提示词模板（5 个）
 - 注意事项和常见错误
 - 质量标准
 
-### references/workflow-structure.md
-
-工作流结构详解，包含：
-- 文件结构概览
-- 顶层配置详解
-- Graph 图结构
-- 所有节点类型的完整字段说明
-- 变量引用规范
-- 坐标系统
-- 最佳实践
-- 版本兼容性
-
 ### references/field-format-spec.md
 
-**重要**：字段格式规范，包含：
+**精简后约 360 行**（原 573 行，精简 37%），包含：
 - label 字段格式（最常见错误）
 - 各类型字段的必需属性
-- output 字段格式
-- knowledge 字段格式
-- varZh 字段说明
-- 完整示例
+- output/knowledge 字段特殊格式
+- 各节点必填字段校验清单
+- 常用参数取值范围
 - 检查清单
 
 ### examples/
 
-示例工作流文件：
-- `example-simple-qa.json`: 简单问答工作流（可直接导入测试）
-- `example-knowledge-retrieval.json`: 知识库检索工作流（可直接导入测试）
+示例工作流文件（可直接导入测试）：
+- `example-simple-qa.json`: 简单问答工作流
+- `example-knowledge-retrieval.json`: 知识库检索工作流
+
+## 精简说明
+
+**文档精简策略**：
+- ✅ 删除重复内容（workflow-structure.md 已合并到 SKILL.md）
+- ✅ 压缩节点示例（从 200-300 行压缩到 50-80 行）
+- ✅ 删除内部 UI 配置字段（l2、info、show 等）
+- ✅ 删除 position 和 measured 字段（运行时自动计算）
+- ✅ 保留所有核心字段和规则
+
+**精简效果**：
+- 总行数：从 2036 行 → 880 行（减少 **57%**）
+- 文件数：从 4 个 → 3 个
+- 生成质量：不受影响（核心信息已保留）
 
 ## 版本
 
-当前版本：v1.0.0 (2026-02-27)
+当前版本：v2.0.0 (2026-03-02) - 精简版
 
 ## 技术支持
 
