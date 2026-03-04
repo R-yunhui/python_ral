@@ -271,19 +271,11 @@ class ToolAgent:
         Returns:
             ToolPlan: 工具选择计划
         """
-        logger.info("开始工具选择")
-
-        # 如果不需要工具，直接返回空计划
         if not intent.needs_tool:
-            logger.info("用户需求不需要调用外部工具")
+            logger.info("工具选择跳过，needs_tool=false")
             return ToolPlan(selected_tools=[], reasoning="用户需求不需要调用外部工具")
 
-        # 生成工具清单描述
-        logger.info("格式化可用工具清单")
         tools_catalog_str = self._format_tools_catalog()
-
-        # 调用 LLM 选择工具
-        logger.info("调用 LLM 进行工具匹配")
         chain = self.select_prompt | self.llm
         response = await chain.ainvoke(
             {
@@ -304,17 +296,12 @@ class ToolAgent:
             tool for tool in self.tools_catalog if tool.tool_key in selected_tool_keys
         ]
 
-        logger.info(f"LLM 推荐了 {len(selected_tool_keys)} 个工具")
-
-        # 如果没有选中任何工具，返回空计划（不强制匹配）
         if not selected_tools and intent.needs_tool:
-            logger.info("未匹配到合适的工具，返回空计划")
+            logger.info("工具选择完成，matched=0，返回空计划")
             return ToolPlan(selected_tools=[], reasoning="未找到与用户需求匹配的工具")
 
-        # 生成执行顺序（简单的拓扑排序，暂无依赖分析）
         execution_order = [tool.tool_key for tool in selected_tools]
-
-        logger.info(f"最终选中 {len(selected_tools)} 个工具：{execution_order}")
+        logger.info("工具选择完成，count=%s, keys=%s", len(selected_tools), execution_order)
 
         return ToolPlan(
             selected_tools=selected_tools,

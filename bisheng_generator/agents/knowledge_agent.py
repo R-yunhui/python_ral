@@ -137,6 +137,7 @@ class KnowledgeAgent:
         接口：GET {base_url}/api/v1/knowledge?page_num=1&page_size=20&name=&type=0
         鉴权：Cookie 中 access_token_cookie（JWT）
         """
+        logger.info("按请求加载知识库，has_token=%s", bool(access_token))
         base_url = (base_url or "").rstrip("/")
         if not base_url:
             logger.warning("毕昇 base_url 为空，跳过知识库加载")
@@ -208,27 +209,19 @@ class KnowledgeAgent:
         Returns:
             KnowledgeMatch: 知识库匹配结果
         """
-        logger.info("开始知识库匹配")
-
-        # 如果不需要知识库，直接返回空结果
         if not intent.needs_knowledge:
-            logger.info("用户需求不需要检索知识库")
+            logger.info("知识库匹配跳过，needs_knowledge=false")
             return KnowledgeMatch(required=False, reasoning="用户需求不需要检索知识库")
 
         if not self.knowledge_catalog:
-            logger.warning("知识库列表为空（未加载或加载失败），跳过匹配")
+            logger.warning("知识库列表为空，跳过匹配")
             return KnowledgeMatch(
                 required=True,
                 matched_knowledge_bases=[],
                 reasoning="知识库列表未加载或为空",
             )
 
-        # 生成知识库清单描述
-        logger.info("格式化可用知识库清单")
         knowledge_catalog_str = self._format_knowledge_catalog()
-
-        # 调用 LLM 匹配知识库
-        logger.info("调用 LLM 进行知识库匹配")
         chain = self.match_prompt | self.llm
         response = await chain.ainvoke(
             {
@@ -250,15 +243,9 @@ class KnowledgeAgent:
             kb for kb in self.knowledge_catalog if kb.id in matched_kb_ids
         ]
 
-        logger.info(f"LLM 匹配到 {len(matched_kb_ids)} 个知识库：{matched_kb_ids}")
-
-        # 如果没有匹配到任何知识库，但有知识库需求，返回最相关的 Top-2
-        # TODO: 这里后续可以使用 embedding 进行语义匹配
         if not matched_knowledge_bases and intent.needs_knowledge:
-            logger.warning("LLM 未匹配到任何知识库，使用默认 Top-2 知识库")
-            matched_knowledge_bases = self.knowledge_catalog[
-                :2
-            ]  # 临时方案：返回前 2 个
+            logger.warning("知识库匹配无结果，使用默认 Top-2")
+            matched_knowledge_bases = self.knowledge_catalog[:2]
 
         # 生成检索配置
         retrieval_config = result.get("retrieval_config", {})
@@ -272,9 +259,10 @@ class KnowledgeAgent:
         # 计算相似度分数（简化版本，TODO: 后续使用实际的向量相似度）
         similarity_score = 0.8 if matched_knowledge_bases else 0.0
 
-        kb_names = [kb.name for kb in matched_knowledge_bases]
         logger.info(
-            f"知识库匹配完成：匹配到 {len(matched_knowledge_bases)} 个知识库 [{', '.join(kb_names)}], 相似度={similarity_score:.2f}"
+            "知识库匹配完成，count=%s, ids=%s",
+            len(matched_knowledge_bases),
+            [kb.id for kb in matched_knowledge_bases],
         )
 
         return KnowledgeMatch(

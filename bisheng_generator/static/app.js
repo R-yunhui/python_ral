@@ -17,6 +17,9 @@ const copyBtn = document.getElementById('copyBtn');
 const toggleJsonBtn = document.getElementById('toggleJsonBtn');
 const historyList = document.getElementById('historyList');
 const refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
+const bishengTokenInput = document.getElementById('bishengTokenInput');
+const saveTokenBtn = document.getElementById('saveTokenBtn');
+const tokenHint = document.getElementById('tokenHint');
 
 // 当前生成的工作流
 let currentWorkflow = null;
@@ -29,7 +32,43 @@ let eventSource = null;
 document.addEventListener('DOMContentLoaded', () => {
     loadHistory();
     setupEventListeners();
+    loadTokenFromCookie();
 });
+
+// 从 Cookie 读取 access_token_cookie 并回填到输入框（不显示完整值，仅提示已保存）
+function getCookie(name) {
+    const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+    return match ? decodeURIComponent(match[2]) : '';
+}
+
+function loadTokenFromCookie() {
+    if (!bishengTokenInput) return;
+    const token = getCookie('access_token_cookie');
+    if (token) {
+        bishengTokenInput.placeholder = '已保存 Token，可重新输入并保存以覆盖';
+        if (tokenHint) tokenHint.textContent = 'Token 已保存，将随请求发送';
+        if (tokenHint) tokenHint.style.display = 'block';
+    }
+}
+
+function saveTokenToCookie() {
+    if (!bishengTokenInput || !saveTokenBtn) return;
+    const value = bishengTokenInput.value.trim();
+    if (!value) {
+        if (tokenHint) {
+            tokenHint.textContent = '请输入 Token 后再保存';
+            tokenHint.style.color = '#856404';
+            tokenHint.style.display = 'block';
+        }
+        return;
+    }
+    document.cookie = 'access_token_cookie=' + encodeURIComponent(value) + '; path=/; max-age=86400; SameSite=Lax';
+    if (tokenHint) {
+        tokenHint.textContent = 'Token 已保存，将随请求发送';
+        tokenHint.style.color = '#28a745';
+        tokenHint.style.display = 'block';
+    }
+}
 
 // 设置事件监听
 function setupEventListeners() {
@@ -38,6 +77,7 @@ function setupEventListeners() {
     copyBtn.addEventListener('click', handleCopy);
     toggleJsonBtn.addEventListener('click', handleToggleJson);
     refreshHistoryBtn.addEventListener('click', loadHistory);
+    if (saveTokenBtn) saveTokenBtn.addEventListener('click', saveTokenToCookie);
 }
 
 // 处理生成请求

@@ -48,14 +48,32 @@ class Config(BaseModel):
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"), description="日志级别"
     )
 
+    # 容错重试配置（各节点最多重试次数，总调用次数 = 1 + 重试次数）
+    max_retries_intent: int = Field(
+        default_factory=lambda: int(os.getenv("MAX_RETRIES_INTENT", "2")),
+        ge=0,
+        description="意图理解节点最大重试次数，默认 2（共 3 次调用）",
+    )
+    max_retries_tool: int = Field(
+        default_factory=lambda: int(os.getenv("MAX_RETRIES_TOOL", "1")),
+        ge=0,
+        description="工具选择节点最大重试次数，默认 1",
+    )
+    max_retries_knowledge: int = Field(
+        default_factory=lambda: int(os.getenv("MAX_RETRIES_KNOWLEDGE", "1")),
+        ge=0,
+        description="知识库匹配节点最大重试次数，默认 1",
+    )
+    max_retries_workflow: int = Field(
+        default_factory=lambda: int(os.getenv("MAX_RETRIES_WORKFLOW", "2")),
+        ge=0,
+        description="工作流生成节点最大重试次数，默认 2（共 3 次调用）",
+    )
+
     # 毕昇平台配置（知识库列表等接口）
     bisheng_base_url: str = Field(
         default_factory=lambda: os.getenv("BISHENG_BASE_URL", "http://localhost:3001"),
         description="毕昇接口域名，用于获取知识库列表等",
-    )
-    bisheng_access_token: str = Field(
-        default_factory=lambda: os.getenv("BISHENG_ACCESS_TOKEN", ""),
-        description="毕昇 access_token（Cookie 中的 JWT），用于鉴权",
     )
     bisheng_api_url: str = Field(
         default="http://localhost:7860", description="毕昇 API 地址（兼容旧配置）"

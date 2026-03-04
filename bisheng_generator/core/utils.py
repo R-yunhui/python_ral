@@ -5,6 +5,31 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+# Optional: httpx may be used by agents for HTTP calls
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore
+
+
+def is_retryable(e: Exception) -> bool:
+    """
+    判断异常是否可重试（网络、超时、解析等临时性错误）。
+    用于容错降级：可重试则重试，否则由调用方决定是否降级或报错。
+    """
+    if isinstance(e, json.JSONDecodeError):
+        return True
+    if httpx is not None:
+        if isinstance(e, (httpx.TimeoutException, httpx.RequestError)):
+            return True
+        if isinstance(e, httpx.HTTPStatusError):
+            if e.response is not None and e.response.status_code >= 500:
+                return True
+    # 其他异常（如 LLM 返回异常、通用网络错误）视为可重试
+    if isinstance(e, (KeyboardInterrupt, SystemExit)):
+        return False
+    return True
+
 
 def extract_json(content: str) -> Optional[Dict[str, Any]]:
     """

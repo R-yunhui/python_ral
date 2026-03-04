@@ -63,6 +63,15 @@ class UserAgent:
                       📌 简单问答场景（都不需要）：
                       - 简单闲聊、通用知识、创意写作等 → needs_tool=false, needs_knowledge=false
 
+                      📌 抽象概念发散重写原则（rewritten_input 专用）：
+                      - 目标：用户说「创建XX助手/机器人」等一句话时，要把抽象概念重写为「可落地的具体能力」，方便后续选工具、匹配知识库、生成工作流节点。
+                      - 何时发散：用户需求是抽象/高层概念时（如「旅游助手」「客服机器人」「学习助手」「写稿助手」）。
+                      - 如何发散：在保持原意前提下，列举该类型助手通常需要的具体能力（查询、检索、推荐、规划等），并标明是否需要知识库、是否需要工具。
+                      - 示例（仅作参考）：
+                        • 用户：「创建一个旅游助手」→ rewritten_input 可写：创建旅游助手工作流，支持查询旅游城市信息、当地天气、景点推荐与行程建议，可结合知识库与天气/地图等工具。
+                        • 用户：「做一个智能客服」→ rewritten_input 可写：创建智能客服工作流，支持从知识库检索 FAQ、查询订单或工单、常见问题解答，可结合知识库与工单/查询类工具。
+                      - 何时不发散：用户需求已经足够具体（如「查北京明天天气」「从公司文档里找制度」），则只做清晰化，不强行罗列能力。
+
                       【详细判断参考】
 
                       1. 是否需要调用外部工具/API？（needs_tool）
@@ -101,7 +110,8 @@ class UserAgent:
 
                       【输出要求】
                       - 必须以 JSON 格式返回，包含字段：rewritten_input, needs_tool, needs_knowledge, multi_turn
-                      - rewritten_input 控制在 50 字以内，使其更清晰完整
+                      - rewritten_input：若用户需求已具体，控制在 50 字以内并写清要点；若为抽象概念（如「XX 助手」），需按上条原则发散为具体能力描述，可放宽至 80–100 字，保持语句连贯无冗余。
+                      - 示例：用户说「帮我创建一个旅游助手」时，rewritten_input 应类似「创建旅游助手工作流：支持查询旅游城市、当地天气、景点推荐与行程建议，可结合知识库与天气/地图等工具」而非仅写「创建一个旅游助手」。
                       - 布尔值字段必须明确返回 true 或 false
                     """,
                 ),
@@ -122,10 +132,7 @@ class UserAgent:
         Returns:
             EnhancedIntent: 结构化的意图描述
         """
-        logger.info(f"开始理解用户意图：{user_input[:50]}...")
-
-        # 调用 LLM 分析
-        logger.info("调用 LLM 分析用户需求")
+        logger.info("意图理解开始，user_input=%s", (user_input or "")[:80])
         chain = self.prompt | self.llm
         response = await chain.ainvoke({"user_input": user_input})
 
@@ -144,15 +151,14 @@ class UserAgent:
             multi_turn=result.get("multi_turn", True),
         )
 
-        # 记录意图分析结果
         features = []
         if intent.needs_tool:
             features.append("工具调用")
         if intent.needs_knowledge:
             features.append("知识库检索")
-
         logger.info(
-            f"意图分析完成：工作流类型={intent.get_workflow_type()}, 功能={features}"
+            "意图理解完成，workflow_type=%s, features=%s",
+            intent.get_workflow_type(),
+            features,
         )
-
         return intent

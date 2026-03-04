@@ -34,8 +34,7 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
 from config.config import config
-from core.graph import WorkflowOrchestrator, ModelInitializer
-from agents.knowledge_agent import KnowledgeAgent
+from core.graph import WorkflowOrchestrator
 from main import save_workflow
 from models.progress import ProgressEvent, ProgressEventType
 
@@ -84,34 +83,13 @@ root_logger.addHandler(utf8_handler)
 
 logger = logging.getLogger(__name__)
 
-async def _load_knowledge_catalog_at_startup(app_instance: FastAPI) -> None:
-    """应用启动时从毕昇接口异步加载知识库列表，供后续请求复用。"""
-    try:
-        llm = ModelInitializer.get_llm(config)
-        embedding = ModelInitializer.get_embedding(config)
-        agent = KnowledgeAgent(llm, embedding)
-        await agent.load_knowledge_catalog(
-            base_url=config.bisheng_base_url,
-            access_token=getattr(config, "bisheng_access_token", "") or "",
-        )
-        app_instance.state.knowledge_catalog = getattr(agent, "knowledge_catalog", [])
-        logger.info(
-            "启动时知识库加载完成，共 %d 个",
-            len(app_instance.state.knowledge_catalog),
-        )
-    except Exception as e:
-        logger.warning("启动时加载知识库失败（将使用空列表）: %s", e)
-        app_instance.state.knowledge_catalog = []
-
-
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    """FastAPI 生命周期：启动时加载知识库列表。"""
-    await _load_knowledge_catalog_at_startup(app_instance)
+    """FastAPI 生命周期。知识库改为按请求从 Cookie token 加载，不再启动时预加载。"""
     yield
 
 
-# 创建 FastAPI 应用（带 lifespan，启动时加载知识库）
+# 创建 FastAPI 应用
 app = FastAPI(
     title="毕昇工作流生成器 API",
     description="提供工作流生成、查看和下载的 API 接口",
@@ -169,10 +147,9 @@ async def root():
         raise HTTPException(status_code=500, detail=f"读取页面失败：{str(e)}")
 
 
-def _inject_knowledge_catalog(orchestrator: WorkflowOrchestrator, catalog: list) -> None:
-    """将启动时加载的知识库列表注入编排器，供本次请求使用。"""
-    if catalog is not None and len(catalog) > 0:
-        orchestrator.knowledge_agent.knowledge_catalog = catalog
+def _get_access_token(request: Request) -> str:
+    """从请求 Cookie 取 token（正式环境由前端登录后携带）。"""
+    return request.cookies.get("access_token_cookie") or ""
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
@@ -182,19 +159,19 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
 
     Args:
         request: 生成请求，包含用户查询
-        fastapi_request: FastAPI 请求对象，用于读取启动时加载的知识库
+        fastapi_request: FastAPI 请求对象，用于读取 Cookie 中的 token
 
     Returns:
         生成的工作流
     """
-    logger.info(f"收到生成请求：{request.query[:50]}...")
+    token = _get_access_token(fastapi_request)
+    logger.info("收到生成请求，query=%s，has_token=%s", request.query[:50], bool(token))
 
     try:
-        # 创建编排器
         orchestrator = WorkflowOrchestrator(request.config)
-        _inject_knowledge_catalog(
-            orchestrator,
-            getattr(fastapi_request.app.state, "knowledge_catalog", None) or [],
+        await orchestrator.knowledge_agent.load_knowledge_catalog(
+            base_url=config.bisheng_base_url,
+            access_token=token,
         )
 
         # 生成工作流
@@ -316,27 +293,26 @@ async def generate_workflow_stream(
     request_config = None
 
     if request:
-        # POST 请求
         user_query = request.query
         request_config = request.config
-        logger.info(f"收到流式生成请求（POST）：{user_query[:50]}...")
     elif query:
-        # GET 请求
         user_query = query
-        logger.info(f"收到流式生成请求（GET）：{user_query[:50]}...")
+        request_config = None
     else:
-        # 返回错误
+        user_query = ""
+
+    if not user_query:
         error_event = ProgressEvent(
             event_type=ProgressEventType.ERROR,
             message="缺少查询参数",
             error="请提供 query 参数",
             progress=0.0,
         )
-
         async def error_generator():
             yield f"event: error\ndata: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-
         return StreamingResponse(error_generator(), media_type="text/event-stream")
+
+    logger.info("收到流式生成请求，query=%s", user_query[:50])
 
     # 创建事件队列
     event_queue = Queue()
@@ -350,44 +326,33 @@ async def generate_workflow_stream(
     async def event_generator() -> AsyncGenerator[str, None]:
         """生成 SSE 事件"""
         try:
-            # 首先发送开始事件（使用标准 SSE 格式）
             start_event = ProgressEvent.create_start_event(user_query)
-            logger.info(f"准备发送开始事件：{start_event.event_type.value}")
             yield f"data: {json.dumps(start_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-            logger.info("已开始事件已发送")
-
-            # 等待一小段时间，确保客户端已接收
             await asyncio.sleep(0.1)
 
-            # 启动生成任务（注入启动时加载的知识库列表）
-            knowledge_catalog = getattr(
-                fastapi_request.app.state, "knowledge_catalog", None
-            ) or []
+            token = _get_access_token(fastapi_request)
+            logger.info("流式生成任务启动，query=%s，has_token=%s", user_query[:50], bool(token))
             generate_task = asyncio.create_task(
                 run_generation(
-                    user_query, request_config, progress_callback, knowledge_catalog
+                    user_query,
+                    request_config,
+                    progress_callback,
+                    access_token=token,
+                    base_url=config.bisheng_base_url,
                 )
             )
-            logger.info("生成任务已启动，等待事件...")
 
-            # 持续从队列读取事件
-            # 持续从队列读取事件
             while True:
-                # 检查任务是否已经完成
                 task_done = generate_task.done()
 
-                # 尝试从队列获取事件（非阻塞，清空当前队列）
                 while not event_queue.empty():
                     try:
                         event = event_queue.get_nowait()
-                        logger.info(f"发送队列事件：{event.event_type.value}")
                         yield f"data: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                     except asyncio.QueueEmpty:
                         break
 
-                # 如果任务已经完成，发送最终状态并退出
                 if task_done:
-                    logger.info("生成任务完成且队列已清空，准备发送最终结果")
                     try:
                         result = generate_task.result()
                         # 如果成功，发送 COMPLETE 确认事件
@@ -405,9 +370,7 @@ async def generate_workflow_stream(
 
                 # 任务未完成，等待新事件
                 try:
-                    # 使用 wait_for 等待新事件，最多等待 1 秒，以便定期检查任务状态
                     event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
-                    logger.info(f"从队列获取到事件：{event.event_type.value}")
                     yield f"data: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                 except asyncio.TimeoutError:
                     # 超时后进入下一次循环，检查 task_done
@@ -422,7 +385,10 @@ async def generate_workflow_stream(
         except Exception as e:
             logger.error(f"SSE 生成器错误：{e}", exc_info=True)
             error_event = ProgressEvent(
-                event_type="error", message=f"生成失败：{str(e)}", error=str(e)
+                event_type=ProgressEventType.ERROR,
+                message=f"生成失败：{str(e)}",
+                error=str(e),
+                progress=0.0,
             )
             # 标准 SSE 格式
             yield f"data: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
@@ -454,7 +420,8 @@ async def run_generation(
     query: str,
     config: Optional[dict],
     progress_callback,
-    knowledge_catalog: Optional[list] = None,
+    access_token: Optional[str] = None,
+    base_url: str = "",
 ) -> dict:
     """
     执行生成任务
@@ -463,38 +430,32 @@ async def run_generation(
         query: 用户查询
         config: 配置
         progress_callback: 进度回调
-        knowledge_catalog: 启动时加载的知识库列表（可选），注入到编排器
+        access_token: 毕昇 access_token（Cookie 或配置），用于按用户加载知识库
+        base_url: 毕昇 API base_url，用于拉取知识库列表
 
     Returns:
         生成结果
     """
-    logger.info(f"[run_generation] 开始执行，query={query[:50]}")
+    logger.info("run_generation 开始，query=%s", query[:50])
     try:
-        # 创建编排器
-        logger.info("[run_generation] 创建编排器...")
         orchestrator = WorkflowOrchestrator(
             config_obj=config, progress_callback=progress_callback
         )
-        _inject_knowledge_catalog(orchestrator, knowledge_catalog or [])
+        await orchestrator.knowledge_agent.load_knowledge_catalog(
+            base_url=base_url,
+            access_token=access_token or "",
+        )
 
-        # 生成工作流
-        logger.info("[run_generation] 调用 generate_with_progress...")
         result = await orchestrator.generate_with_progress(
             user_input=query, progress_callback=progress_callback
         )
-        logger.info(
-            f"[run_generation] generate_with_progress 返回，status={result.get('status')}"
-        )
 
         if result.get("status") == "success":
-            # 保存工作流
             workflow = result.get("workflow")
             if workflow:
                 filepath = save_workflow(workflow)
                 result["file_path"] = str(filepath)
-                logger.info(f"工作流已保存：{filepath}")
-
-        logger.info(f"[run_generation] 返回结果：{result.get('status')}")
+                logger.info("工作流已保存，path=%s", filepath)
         return result
 
     except Exception as e:

@@ -14,6 +14,19 @@
         </header>
 
         <main>
+            <!-- Demo：毕昇 Token（正式环境由登录 Cookie 提供） -->
+            <section class="input-section" style="margin-bottom: 1rem;">
+                <div class="form-group">
+                    <label for="bishengTokenInput">毕昇 Token（Demo）：</label>
+                    <p class="form-hint" style="font-size: 0.85rem; color: #666; margin-bottom: 0.5rem;">用于拉取当前用户知识库，正式环境由登录 Cookie 提供。</p>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="password" id="bishengTokenInput" placeholder="粘贴 access_token（JWT）" style="flex: 1; padding: 0.5rem;">
+                        <button type="button" id="saveTokenBtn" class="btn btn-secondary">保存 Token</button>
+                    </div>
+                    <p id="tokenHint" style="font-size: 0.8rem; color: #28a745; margin-top: 0.25rem; display: none;">Token 已保存，将随请求发送</p>
+                </div>
+            </section>
+
             <!-- 输入区域 -->
             <section class="input-section">
                 <div class="form-group">

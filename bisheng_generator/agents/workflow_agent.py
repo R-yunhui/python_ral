@@ -82,14 +82,9 @@ class WorkflowAgent:
         Returns:
             毕昇工作流 JSON 字典
         """
-        logger.info("开始生成工作流")
-
-        # 准备工作上下文信息
         tools_info = self._format_tools_info(tool_plan)
         knowledge_info = self._format_knowledge_info(knowledge_match)
 
-        # 生成系统提示
-        logger.info("获取 skills 目录和工具使用说明")
         catalog = await self._get_skills_catalog()
         instructions = get_tools_usage_instructions()
 
@@ -116,8 +111,6 @@ class WorkflowAgent:
                     - 如果任务有结构化数据，请放在 JSON 对象中
                 """
 
-        # 创建 agent
-        logger.info("创建工作流生成 Agent")
         agent = create_agent(
             model=self.llm,
             tools=await self._get_tools(),
@@ -125,8 +118,7 @@ class WorkflowAgent:
             debug=False,
         )
 
-        # 运行 agent
-        logger.info("调用 LLM 生成工作流")
+        logger.info("调用 LLM 生成工作流 JSON")
         result = await agent.ainvoke(
             {
                 "messages": [
@@ -143,10 +135,13 @@ class WorkflowAgent:
         usage_metadata = self._usage_callback.usage_metadata.get(
             os.getenv("QWEN_CHAT_MODEL")
         )
-        logger.info("工作流生成完成，token 使用情况如下：")
-        logger.info(f"  输入 tokens: {usage_metadata.get('input_tokens')}")
-        logger.info(f"  输出 tokens: {usage_metadata.get('output_tokens')}")
-        logger.info(f"  总计 tokens: {usage_metadata.get('total_tokens')}")
+        if usage_metadata:
+            logger.info(
+                "LLM 调用完成，tokens: in=%s out=%s total=%s",
+                usage_metadata.get("input_tokens"),
+                usage_metadata.get("output_tokens"),
+                usage_metadata.get("total_tokens"),
+            )
 
         # 提取 JSON
         content = result["messages"][-1].content
@@ -160,9 +155,7 @@ class WorkflowAgent:
         # 规范化工作流，补全毕昇前端必需的 value 等字段，避免导入时报 "Cannot read properties of undefined (reading 'value')"
         workflow_json = self._normalize_workflow(workflow_json)
 
-        logger.info(
-            f"工作流生成成功，包含 {len(workflow_json.get('nodes', []))} 个节点"
-        )
+        logger.info("工作流生成成功，nodes=%s", len(workflow_json.get("nodes", [])))
         return workflow_json
 
     def _normalize_workflow(self, w: Dict[str, Any]) -> Dict[str, Any]:
