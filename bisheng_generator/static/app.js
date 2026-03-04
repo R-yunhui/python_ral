@@ -43,7 +43,7 @@ function setupEventListeners() {
 // 处理生成请求
 async function handleGenerate() {
     const query = queryInput.value.trim();
-    
+
     if (!query) {
         showError('请输入工作流需求描述');
         return;
@@ -71,9 +71,15 @@ async function handleGenerate() {
 // 使用 SSE 进行流式生成
 async function generateWithSSE(query) {
     return new Promise((resolve, reject) => {
+        // 如果已有连接，强行关闭
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+
         // 使用 URL 查询参数传递 query（EventSource 不支持自定义 headers）
         const url = `/api/generate/stream?query=${encodeURIComponent(query)}`;
-        const eventSource = new EventSource(url);
+        eventSource = new EventSource(url);
 
         let isComplete = false;
 
@@ -82,15 +88,18 @@ async function generateWithSSE(query) {
             try {
                 const data = JSON.parse(event.data);
                 console.log('收到 SSE 消息:', data.event_type, data.message);
-                
+
                 // 根据事件类型处理
                 if (data.event_type === 'complete') {
                     // 完成事件
                     isComplete = true;
-                    eventSource.close();
+                    if (eventSource) {
+                        eventSource.close();
+                        eventSource = null;
+                    }
                     hideLoading();
                     hideProgress();
-                    
+
                     if (data.data && data.data.status === 'success') {
                         showResult(data.data);
                     } else {
@@ -101,7 +110,10 @@ async function generateWithSSE(query) {
                 } else if (data.event_type === 'error') {
                     // 错误事件
                     isComplete = true;
-                    eventSource.close();
+                    if (eventSource) {
+                        eventSource.close();
+                        eventSource = null;
+                    }
                     hideLoading();
                     hideProgress();
                     showError(data.message || data.error || '生成失败');
@@ -113,17 +125,22 @@ async function generateWithSSE(query) {
                 }
             } catch (err) {
                 console.error('解析 SSE 消息失败:', err);
-                reject(err);
+                // 这里暂时不 reject，避免意外干扰进度推送
             }
         };
 
-        // 监听所有消息（标准 SSE onmessage）
+        // 监听所有消息
         eventSource.onmessage = handleMessage;
 
         // 连接错误处理
         eventSource.onerror = (err) => {
             console.error('SSE 连接错误:', err);
+            // 只有在未完成的情况下才处理连接错误报错
             if (!isComplete) {
+                if (eventSource) {
+                    eventSource.close();
+                    eventSource = null;
+                }
                 hideLoading();
                 hideProgress();
                 disableGenerateBtn(false);
@@ -136,28 +153,28 @@ async function generateWithSSE(query) {
 // 处理进度事件
 function handleProgressEvent(data) {
     const { event_type, agent_name, message, progress, data: eventData, duration_ms, error } = data;
-    
+
     // 显示进度区域
     progressSection.style.display = 'block';
-    
+
     // 更新进度条
     if (progress !== undefined && progress !== null) {
         updateProgressBar(progress);
     }
-    
+
     // 添加日志项
     if (event_type === 'agent_start') {
         addProgressLog(message, 'running', agent_name);
     } else if (event_type === 'agent_complete') {
-        updateLastLog('success', message, eventData, duration_ms);
+        updateLog(agent_name, 'success', message, eventData, duration_ms);
     } else if (event_type === 'agent_error') {
-        updateLastLog('error', message, { error }, duration_ms);
+        updateLog(agent_name, 'error', message, { error }, duration_ms);
     } else if (event_type === 'start') {
-        addProgressLog(message, 'running');
+        addProgressLog(message, 'running', 'system_start');
     } else if (event_type === 'complete') {
-        updateLastLog('success', message, eventData);
+        updateLog('system_start', 'success', message, eventData);
     } else if (event_type === 'error') {
-        updateLastLog('error', message, { error });
+        updateLog(null, 'error', message, { error });
     }
 }
 
@@ -172,52 +189,72 @@ function addProgressLog(message, status = 'waiting', agentName = null) {
     const logItem = document.createElement('div');
     logItem.className = `progress-log-item ${status}`;
     logItem.dataset.agent = agentName || 'unknown';
-    
+
     const icon = getIconForStatus(status);
-    
+
     logItem.innerHTML = `
         <div class="progress-log-icon">${icon}</div>
         <div class="progress-log-content">
             <div class="progress-log-message">${escapeHtml(message)}</div>
         </div>
     `;
-    
+
     progressLogs.appendChild(logItem);
     scrollToBottom();
 }
 
-// 更新最后一条日志
-function updateLastLog(status, message, details = null, durationMs = null) {
-    const lastLog = progressLogs.lastElementChild;
-    if (!lastLog) return;
-    
+// 更新指定的日志项（支持并行定位）
+function updateLog(agentName, status, message, details = null, durationMs = null) {
+    let targetLog = null;
+
+    if (agentName) {
+        // 查找属于该 agent 且处于非完成状态的最后一条日志
+        const agentLogs = Array.from(progressLogs.querySelectorAll(`.progress-log-item[data-agent="${agentName}"]`));
+        targetLog = agentLogs[agentLogs.length - 1];
+    }
+
+    // 如果找不到指定的，或者没有 agentName，则回退到最后一条
+    if (!targetLog) {
+        targetLog = progressLogs.lastElementChild;
+    }
+
+    if (!targetLog) return;
+
     // 更新状态类
-    lastLog.className = `progress-log-item ${status}`;
-    
+    targetLog.className = `progress-log-item ${status}`;
+
     // 更新图标
-    const iconEl = lastLog.querySelector('.progress-log-icon');
+    const iconEl = targetLog.querySelector('.progress-log-icon');
     if (iconEl) {
         iconEl.textContent = getIconForStatus(status);
     }
-    
+
     // 更新消息
-    const messageEl = lastLog.querySelector('.progress-log-message');
+    const messageEl = targetLog.querySelector('.progress-log-message');
     if (messageEl) {
         messageEl.textContent = message;
     }
-    
+
     // 添加详情
     if (details || durationMs) {
-        const detailsDiv = document.createElement('div');
-        detailsDiv.className = 'progress-log-details';
-        
+        // 先检查是否已经存在详情区域，如果有则追加或替换（防止并行数据堆叠在同一个 DOM 里）
+        let detailsDiv = targetLog.querySelector('.progress-log-details');
+        if (!detailsDiv) {
+            detailsDiv = document.createElement('div');
+            detailsDiv.className = 'progress-log-details';
+            targetLog.querySelector('.progress-log-content').appendChild(detailsDiv);
+        }
+
         let detailsHtml = '';
-        
+
+        // 如果是追加模式，保留旧内容（可选，这里我们根据 agent_complete 的逻辑覆盖）
+        // 但为了防止并行时数据被覆盖，我们重新构建
+
         // 添加耗时
         if (durationMs !== null && durationMs !== undefined) {
             detailsHtml += `<span class="progress-log-duration">耗时：${(durationMs / 1000).toFixed(1)}s</span>`;
         }
-        
+
         // 添加详情数据
         if (details) {
             const detailItems = [];
@@ -241,16 +278,17 @@ function updateLastLog(status, message, details = null, durationMs = null) {
             if (details.error) {
                 detailItems.push(`错误：${details.error}`);
             }
-            
+
             if (detailItems.length > 0) {
-                detailsHtml += '<br>' + detailItems.join(' | ');
+                detailsHtml += (detailsHtml ? ' | ' : '') + detailItems.join(' | ');
             }
         }
-        
+
+        // 注意：这里用 innerHTML 可能会覆盖之前的 details，
+        // 在并行场景下，我们需要确保每个 Agent 只更新自己的 row。
         detailsDiv.innerHTML = detailsHtml;
-        lastLog.querySelector('.progress-log-content').appendChild(detailsDiv);
     }
-    
+
     scrollToBottom();
 }
 
@@ -323,7 +361,7 @@ function showResult(data) {
     // 显示元数据
     if (data.metadata) {
         let metadataHtml = '';
-        
+
         if (data.metadata.intent) {
             metadataHtml += `
                 <div class="metadata-item">
@@ -332,7 +370,7 @@ function showResult(data) {
                 </div>
             `;
         }
-        
+
         if (data.metadata.tools_count !== undefined) {
             metadataHtml += `
                 <div class="metadata-item">
@@ -341,7 +379,7 @@ function showResult(data) {
                 </div>
             `;
         }
-        
+
         if (data.metadata.knowledge_count !== undefined) {
             metadataHtml += `
                 <div class="metadata-item">
@@ -350,7 +388,7 @@ function showResult(data) {
                 </div>
             `;
         }
-        
+
         metadata.innerHTML = metadataHtml;
     }
 
@@ -361,7 +399,7 @@ function showResult(data) {
 
     // 显示结果区域
     result.style.display = 'block';
-    
+
     // 滚动到结果区域
     result.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -427,7 +465,7 @@ async function loadHistory() {
         }
 
         const workflows = await response.json();
-        
+
         if (workflows.length === 0) {
             historyList.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 2rem;">暂无历史工作流</p>';
             return;
@@ -437,7 +475,7 @@ async function loadHistory() {
             const date = new Date(wf.created_at * 1000);
             const dateStr = date.toLocaleString('zh-CN');
             const sizeStr = (wf.size / 1024).toFixed(2) + ' KB';
-            
+
             return `
                 <div class="history-item">
                     <div class="history-info">
@@ -468,15 +506,15 @@ async function viewWorkflow(filename) {
         }
 
         const data = await response.json();
-        
+
         // 显示工作流
         currentWorkflow = data.workflow;
         currentFilename = data.filename;
-        
+
         jsonContent.textContent = JSON.stringify(data.workflow, null, 2);
         result.style.display = 'block';
         result.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        
+
         showToast('工作流加载成功！');
     } catch (err) {
         console.error('查看失败:', err);
@@ -515,7 +553,7 @@ function showToast(message) {
     toast.className = 'toast';
     toast.textContent = message;
     document.body.appendChild(toast);
-    
+
     setTimeout(() => {
         toast.remove();
     }, 3000);

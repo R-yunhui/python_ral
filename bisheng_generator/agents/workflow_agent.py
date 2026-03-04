@@ -22,6 +22,7 @@ from langchain_core.callbacks import UsageMetadataCallbackHandler
 from models.intent import EnhancedIntent
 from agents.tool_agent import ToolPlan
 from agents.knowledge_agent import KnowledgeMatch
+from core.utils import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class WorkflowAgent:
         logger.info("加载 bisheng-workflow-generator skill")
         # 设置 skills 根路径（Provider 会在根目录下查找 skill 子目录）
         skills_root = Path(__file__).parent.parent.parent / "skills"
-        
+
         # 创建 Provider 和 Registry
         provider = LocalFileSystemSkillProvider(skills_root)
         registry = SkillRegistry()
@@ -82,7 +83,7 @@ class WorkflowAgent:
             毕昇工作流 JSON 字典
         """
         logger.info("开始生成工作流")
-        
+
         # 准备工作上下文信息
         tools_info = self._format_tools_info(tool_plan)
         knowledge_info = self._format_knowledge_info(knowledge_match)
@@ -135,14 +136,21 @@ class WorkflowAgent:
                     }
                 ]
             },
-            config=RunnableConfig(callbacks=[self._usage_callback])
+            config=RunnableConfig(callbacks=[self._usage_callback]),
         )
-        
-        logger.info(f"工作流生成完成，使用情况：{self._usage_callback.usage_metadata}")
+        import os
+
+        usage_metadata = self._usage_callback.usage_metadata.get(
+            os.getenv("QWEN_CHAT_MODEL")
+        )
+        logger.info("工作流生成完成，token 使用情况如下：")
+        logger.info(f"  输入 tokens: {usage_metadata.get('input_tokens')}")
+        logger.info(f"  输出 tokens: {usage_metadata.get('output_tokens')}")
+        logger.info(f"  总计 tokens: {usage_metadata.get('total_tokens')}")
 
         # 提取 JSON
         content = result["messages"][-1].content
-        workflow_json = self._extract_json(content)
+        workflow_json = extract_json(content)
 
         if not workflow_json:
             logger.warning("工作流 JSON 提取失败")
@@ -152,7 +160,9 @@ class WorkflowAgent:
         # 规范化工作流，补全毕昇前端必需的 value 等字段，避免导入时报 "Cannot read properties of undefined (reading 'value')"
         workflow_json = self._normalize_workflow(workflow_json)
 
-        logger.info(f"工作流生成成功，包含 {len(workflow_json.get('nodes', []))} 个节点")
+        logger.info(
+            f"工作流生成成功，包含 {len(workflow_json.get('nodes', []))} 个节点"
+        )
         return workflow_json
 
     def _normalize_workflow(self, w: Dict[str, Any]) -> Dict[str, Any]:
@@ -164,6 +174,7 @@ class WorkflowAgent:
         edges、viewport 等。
         """
         from datetime import datetime
+
         now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
         # 1. 顶层字段
@@ -194,7 +205,11 @@ class WorkflowAgent:
                 if d.get("type") == "start":
                     for grp in d.get("group_params", []):
                         for p in grp.get("params", []):
-                            if p.get("key") == "guide_word" and "value" in p and p["value"]:
+                            if (
+                                p.get("key") == "guide_word"
+                                and "value" in p
+                                and p["value"]
+                            ):
                                 w["guide_word"] = p["value"]
                                 break
                     break
@@ -231,7 +246,10 @@ class WorkflowAgent:
                 self._ensure_param_value(p)
 
             # knowledge_retriever 特殊参数
-            if node_type == "knowledge_retriever" and grp.get("name") == "知识库检索设置":
+            if (
+                node_type == "knowledge_retriever"
+                and grp.get("name") == "知识库检索设置"
+            ):
                 self._ensure_knowledge_retriever_params(params)
 
             # llm 模型设置
@@ -295,40 +313,46 @@ class WorkflowAgent:
         """知识库检索节点必须包含 metadata_filter、advanced_retrieval_switch"""
         keys = [x.get("key") for x in params]
         if "metadata_filter" not in keys:
-            params.append({
-                "key": "metadata_filter",
-                "type": "metadata_filter",
-                "label": "true",
-                "value": {"enabled": False},
-            })
+            params.append(
+                {
+                    "key": "metadata_filter",
+                    "type": "metadata_filter",
+                    "label": "true",
+                    "value": {"enabled": False},
+                }
+            )
         if "advanced_retrieval_switch" not in keys:
-            params.append({
-                "key": "advanced_retrieval_switch",
-                "type": "search_switch",
-                "label": "true",
-                "value": {
-                    "keyword_weight": 0.4,
-                    "vector_weight": 0.6,
-                    "user_auth": False,
-                    "search_switch": True,
-                    "rerank_flag": False,
-                    "rerank_model": "",
-                    "max_chunk_size": 15000,
-                },
-            })
+            params.append(
+                {
+                    "key": "advanced_retrieval_switch",
+                    "type": "search_switch",
+                    "label": "true",
+                    "value": {
+                        "keyword_weight": 0.4,
+                        "vector_weight": 0.6,
+                        "user_auth": False,
+                        "search_switch": True,
+                        "rerank_flag": False,
+                        "rerank_model": "",
+                        "max_chunk_size": 15000,
+                    },
+                }
+            )
 
     def _ensure_llm_model_params(self, params: List[Dict[str, Any]]) -> None:
         """LLM 模型设置必须包含 temperature"""
         keys = [x.get("key") for x in params]
         if "temperature" not in keys:
-            params.append({
-                "key": "temperature",
-                "step": 0.1,
-                "type": "slide",
-                "label": "true",
-                "scope": [0, 2],
-                "value": 0.3,
-            })
+            params.append(
+                {
+                    "key": "temperature",
+                    "step": 0.1,
+                    "type": "slide",
+                    "label": "true",
+                    "scope": [0, 2],
+                    "value": 0.3,
+                }
+            )
 
     def _normalize_edges(self, w: Dict[str, Any]) -> None:
         """确保 edges 每项有必需字段"""
@@ -384,31 +408,5 @@ class WorkflowAgent:
             await registry.register("bisheng-workflow-generator", provider)
             return await registry.get_skills_catalog(format="xml")
         except Exception as e:
+            logger.exception(f"获取 skills 目录失败：{e}")
             return f"获取 skills 目录失败：{e}"
-
-    def _extract_json(self, content: str) -> Optional[Dict[str, Any]]:
-        """从内容中提取 JSON"""
-        if not content.strip():
-            return None
-
-        # 尝试提取 ```json 代码块
-        json_block = re.search(r"```json\s*([\s\S]*?)```", content)
-        if json_block:
-            json_str = json_block.group(1).strip()
-        else:
-            # 尝试提取任意 ``` 代码块
-            code_block = re.search(r"```\s*([\s\S]*?)```", content)
-            if code_block:
-                json_str = code_block.group(1).strip()
-            else:
-                # 尝试查找第一个 { 到最后一个 }
-                json_match = re.search(r"\{[\s\S]*\}", content)
-                if json_match:
-                    json_str = json_match.group(0)
-                else:
-                    json_str = content.strip()
-
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            return None

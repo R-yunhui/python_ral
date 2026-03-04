@@ -13,7 +13,7 @@ from core.graph import WorkflowOrchestrator, ModelInitializer
 # 配置日志
 logging.basicConfig(
     level=getattr(logging, config.log_level),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - [%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,9 @@ def main():
                 # 显示元数据
                 metadata = result.get("metadata", {})
                 if metadata:
-                    print(f"工作流类型：{metadata.get('intent', {}).get('workflow_type', '未知')}")
+                    print(
+                        f"工作流类型：{metadata.get('intent', {}).get('workflow_type', '未知')}"
+                    )
                     print(f"选中工具数：{metadata.get('tools_count', 0)}")
                     print(f"匹配知识库数：{metadata.get('knowledge_count', 0)}")
                     print()
@@ -134,7 +136,7 @@ def main():
 
         except Exception as e:
             print(f"\n[ERROR] 生成失败：{e}\n")
-            logger.exception("工作流生成失败")
+            logger.exception("工作流生成出现异常")
 
 
 if __name__ == "__main__":

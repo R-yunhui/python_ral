@@ -15,6 +15,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from models.intent import EnhancedIntent
+from core.utils import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -96,15 +97,15 @@ class ToolAgent:
 {tools_catalog}
 
 选择原则：
-1. 语义匹配：选择与用户需求最相关的工具
+1. 精准匹配：只选择与用户需求明确相关的工具，不要强行匹配
 2. 参数完整性：确保工具参数可以被满足
 3. 最小化原则：只选择必要的工具，避免过度使用
-4. 知识库检索优先：如果能通过知识库解决，不需要调用工具
+4. 允许为空：如果没有合适的工具，返回空列表
 
 请分析并返回：
-- selected_tools: 选中的工具列表（返回 tool_key 数组）
+- selected_tools: 选中的工具列表（返回 tool_key 数组，如果没有匹配的工具则返回空数组）
 - parameters_mapping: 参数映射关系（格式说明：key 为 "工具 key_参数名"，value 为节点变量名，例如：web_search_query -> user_query）
-- reasoning: 选择理由（50 字以内）
+- reasoning: 选择理由（50 字以内，如果没有选中工具则说明原因）
 
 以 JSON 格式返回。
 """,
@@ -116,177 +117,48 @@ class ToolAgent:
         """
         初始化工具清单
 
-        基于毕昇平台内置的预定义工具
-        参考：src/backend/bisheng/tool/domain/services/tool.py
+        精选高可用性核心工具
         """
         return [
-            # ========== 知识库检索工具 ==========
+            # ========== 基础工具 ==========
             ToolDefinition(
-                id=100001,
-                name="知识库和文件内容检索",
-                tool_key="search_knowledge_base",
-                desc="检索组织知识库、个人知识库以及本地上传文件的内容。支持语义检索，返回与查询相关的文档片段。",
+                id=1,
+                name="计算器",
+                tool_key="calculator",
+                desc="执行数学表达式计算，支持加减乘除、指数、对数、三角函数等运算",
                 logo=None,
                 parameters=[
                     {
-                        "name": "query",
+                        "name": "expression",
                         "type": "string",
-                        "description": "用户查询问题，用于在知识库中检索相关内容",
+                        "description": "数学表达式，例如：2 + 2 * 3 或 sin(3.14/2)",
                         "required": True,
                     }
                 ],
                 extra={},
             ),
-            # ========== 文件操作工具 ==========
             ToolDefinition(
-                id=200001,
-                name="获取所有文件和目录",
-                tool_key="list_files",
-                desc="列出指定目录下的所有文件和子目录。",
+                id=2,
+                name="获取当前时间",
+                tool_key="get_current_time",
+                desc="返回当前时间（UTC+8 时区），支持指定时区转换",
                 logo=None,
                 parameters=[
                     {
-                        "name": "path",
+                        "name": "timezone",
                         "type": "string",
-                        "description": "要列出内容的目录路径，默认为当前工作目录",
+                        "description": "时区，例如：UTC+8、America/New_York，默认为 UTC+8",
                         "required": False,
                     }
                 ],
                 extra={},
             ),
+            # ========== 搜索检索工具 ==========
             ToolDefinition(
-                id=200002,
-                name="获取文件详细信息",
-                tool_key="get_file_details",
-                desc="获取指定文件的文件名、文件大小、文件地址、字数、行数等详细信息。",
-                logo=None,
-                parameters=[
-                    {
-                        "name": "file_path",
-                        "type": "string",
-                        "description": "要获取详细信息的文件路径",
-                        "required": True,
-                    }
-                ],
-                extra={},
-            ),
-            ToolDefinition(
-                id=200003,
-                name="搜索文件",
-                tool_key="search_files",
-                desc="在指定目录中搜索文件和子目录，支持文件名模式匹配。",
-                logo=None,
-                parameters=[
-                    {
-                        "name": "pattern",
-                        "type": "string",
-                        "description": "文件名搜索模式，支持通配符，如 '*.txt'",
-                        "required": True,
-                    },
-                    {
-                        "name": "path",
-                        "type": "string",
-                        "description": "搜索的目录路径，默认为当前工作目录",
-                        "required": False,
-                    },
-                ],
-                extra={},
-            ),
-            ToolDefinition(
-                id=200004,
-                name="读取文件内容",
-                tool_key="read_text_file",
-                desc="读取本地文本文件的内容。",
-                logo=None,
-                parameters=[
-                    {
-                        "name": "file_path",
-                        "type": "string",
-                        "description": "要读取的文本文件路径",
-                        "required": True,
-                    }
-                ],
-                extra={},
-            ),
-            ToolDefinition(
-                id=200005,
-                name="写入文件内容",
-                tool_key="add_text_to_file",
-                desc="将文本内容追加到文本文件，如果文件不存在，则创建文件。",
-                logo=None,
-                parameters=[
-                    {
-                        "name": "file_path",
-                        "type": "string",
-                        "description": "要写入的文件路径",
-                        "required": True,
-                    },
-                    {
-                        "name": "content",
-                        "type": "string",
-                        "description": "要追加的文本内容",
-                        "required": True,
-                    },
-                ],
-                extra={},
-            ),
-            ToolDefinition(
-                id=200006,
-                name="替换文件指定行范围内容",
-                tool_key="replace_file_lines",
-                desc="替换文件中的指定行范围内容。",
-                logo=None,
-                parameters=[
-                    {
-                        "name": "file_path",
-                        "type": "string",
-                        "description": "要修改的文件路径",
-                        "required": True,
-                    },
-                    {
-                        "name": "start_line",
-                        "type": "integer",
-                        "description": "起始行号（从 1 开始）",
-                        "required": True,
-                    },
-                    {
-                        "name": "end_line",
-                        "type": "integer",
-                        "description": "结束行号（包含）",
-                        "required": True,
-                    },
-                    {
-                        "name": "content",
-                        "type": "string",
-                        "description": "替换的新内容",
-                        "required": True,
-                    },
-                ],
-                extra={},
-            ),
-            # ========== 代码解释器工具 ==========
-            ToolDefinition(
-                id=300001,
-                name="代码解释器",
-                tool_key="bisheng_code_interpreter",
-                desc="执行 Python 代码并返回结果。支持数据分析、图表生成、文件处理等任务。",
-                logo=None,
-                parameters=[
-                    {
-                        "name": "python_code",
-                        "type": "string",
-                        "description": "要执行的 Python 代码脚本",
-                        "required": True,
-                    }
-                ],
-                extra={},
-            ),
-            # ========== 联网搜索工具 ==========
-            ToolDefinition(
-                id=400001,
+                id=3,
                 name="联网搜索",
                 tool_key="web_search",
-                desc="使用 query 进行联网检索并返回结果。支持搜索网页、新闻、文章等实时信息。",
+                desc="使用 Bing 搜索引擎检索网页、新闻、学术文章等实时信息，返回搜索结果摘要和链接",
                 logo=None,
                 parameters=[
                     {
@@ -294,7 +166,96 @@ class ToolAgent:
                         "type": "string",
                         "description": "搜索查询关键词",
                         "required": True,
+                    },
+                    {
+                        "name": "num_results",
+                        "type": "integer",
+                        "description": "返回结果数量，取值范围 1-50，默认为 10",
+                        "required": False,
+                    },
+                ],
+                extra={},
+            ),
+            ToolDefinition(
+                id=4,
+                name="网页爬取",
+                tool_key="fire_scrape",
+                desc="爬取指定 URL 的网页内容并转换为 Markdown 格式，支持单页面和深度爬取（包含子页面）",
+                logo=None,
+                parameters=[
+                    {
+                        "name": "url",
+                        "type": "string",
+                        "description": "要爬取的网页 URL",
+                        "required": True,
+                    },
+                    {
+                        "name": "mode",
+                        "type": "string",
+                        "description": "爬取模式：single（单页面）或 deep（包含子页面），默认为 single",
+                        "required": False,
+                    },
+                ],
+                extra={},
+            ),
+            ToolDefinition(
+                id=5,
+                name="网页转 Markdown",
+                tool_key="jina_reader",
+                desc="将网页（包括 PDF、Word 文档）转换为 Markdown 格式，适合 LLM 处理和分析",
+                logo=None,
+                parameters=[
+                    {
+                        "name": "url",
+                        "type": "string",
+                        "description": "要转换的网页 URL",
+                        "required": True,
                     }
+                ],
+                extra={},
+            ),
+            # ========== 图像生成工具 ==========
+            ToolDefinition(
+                id=6,
+                name="AI 绘画（Flux）",
+                tool_key="flux_image_gen",
+                desc="使用 Flux 模型生成高质量图像，支持复杂场景描述和多种艺术风格",
+                logo=None,
+                parameters=[
+                    {
+                        "name": "prompt",
+                        "type": "string",
+                        "description": "图像描述词（建议使用英文以获得更好效果）",
+                        "required": True,
+                    },
+                    {
+                        "name": "size",
+                        "type": "string",
+                        "description": "图像尺寸，可选值：1024x1024、1920x1080、1080x1920，默认为 1024x1024",
+                        "required": False,
+                    },
+                ],
+                extra={},
+            ),
+            ToolDefinition(
+                id=7,
+                name="AI 绘画（DALL-E 3）",
+                tool_key="dalle_image_gen",
+                desc="使用 DALL-E 3 模型生成图像，适合艺术风格创作和创意图像生成",
+                logo=None,
+                parameters=[
+                    {
+                        "name": "prompt",
+                        "type": "string",
+                        "description": "图像描述词，详细描述想要生成的图像内容",
+                        "required": True,
+                    },
+                    {
+                        "name": "style",
+                        "type": "string",
+                        "description": "艺术风格：vivid（鲜艳风格）或 natural（自然风格），默认为 vivid",
+                        "required": False,
+                    },
                 ],
                 extra={},
             ),
@@ -332,11 +293,9 @@ class ToolAgent:
         )
 
         # 解析响应
-        import json
-
-        try:
-            result = json.loads(response.content)
-        except:
+        result = extract_json(response.content)
+        if result is None:
+            logger.error(f"LLM 响应 JSON 提取/解析失败。原始响应：{response.content}")
             result = {}
 
         # 获取选中的工具
@@ -347,11 +306,10 @@ class ToolAgent:
 
         logger.info(f"LLM 推荐了 {len(selected_tool_keys)} 个工具")
 
-        # 如果没有选中任何工具，但有工具需求，选择最相关的 Top-3
-        # TODO: 这里后续可以使用 embedding 进行语义匹配
+        # 如果没有选中任何工具，返回空计划（不强制匹配）
         if not selected_tools and intent.needs_tool:
-            logger.warning("LLM 未选中任何工具，使用默认 Top-3 工具")
-            selected_tools = self.tools_catalog[:3]  # 临时方案：返回前 3 个
+            logger.info("未匹配到合适的工具，返回空计划")
+            return ToolPlan(selected_tools=[], reasoning="未找到与用户需求匹配的工具")
 
         # 生成执行顺序（简单的拓扑排序，暂无依赖分析）
         execution_order = [tool.tool_key for tool in selected_tools]

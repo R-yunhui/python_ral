@@ -12,6 +12,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain_core.prompts import ChatPromptTemplate
 from models.intent import EnhancedIntent
+from core.utils import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -122,22 +123,16 @@ class UserAgent:
             EnhancedIntent: 结构化的意图描述
         """
         logger.info(f"开始理解用户意图：{user_input[:50]}...")
-        
+
         # 调用 LLM 分析
         logger.info("调用 LLM 分析用户需求")
         chain = self.prompt | self.llm
         response = await chain.ainvoke({"user_input": user_input})
 
         # 解析 JSON 响应
-        import json
-
-        try:
-            result = json.loads(response.content)
-        except Exception as e:
-            # 解析失败时记录详细错误信息
-            logger.error(f"LLM 响应 JSON 解析失败：{str(e)}")
-            logger.error(f"LLM 原始响应内容：{response.content}")
-            logger.warning("使用默认值")
+        result = extract_json(response.content)
+        if result is None:
+            logger.error(f"LLM 响应 JSON 提取/解析失败。原始响应：{response.content}")
             result = {}
 
         # 创建 EnhancedIntent
@@ -148,14 +143,16 @@ class UserAgent:
             needs_knowledge=result.get("needs_knowledge", False),
             multi_turn=result.get("multi_turn", True),
         )
-        
+
         # 记录意图分析结果
         features = []
         if intent.needs_tool:
             features.append("工具调用")
         if intent.needs_knowledge:
             features.append("知识库检索")
-        
-        logger.info(f"意图分析完成：工作流类型={intent.get_workflow_type()}, 功能={features}")
-        
+
+        logger.info(
+            f"意图分析完成：工作流类型={intent.get_workflow_type()}, 功能={features}"
+        )
+
         return intent

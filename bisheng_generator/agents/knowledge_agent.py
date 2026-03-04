@@ -15,6 +15,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from models.intent import EnhancedIntent
+from core.utils import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ class KnowledgeAgent:
     def _init_knowledge_catalog(self) -> List[KnowledgeBaseDefinition]:
         """
         初始化知识库清单
-        
+
         基于毕昇平台现有的真实知识库
         """
         return [
@@ -121,8 +122,8 @@ class KnowledgeAgent:
                     "collection_name": "col_1770633881_0d9d02fb",
                     "index_name": "col_1770633881_0d9d02fb",
                     "state": 1,
-                    "type": 0
-                }
+                    "type": 0,
+                },
             ),
             KnowledgeBaseDefinition(
                 id=7,
@@ -136,10 +137,9 @@ class KnowledgeAgent:
                     "collection_name": "col_1770687360_549bb98b",
                     "index_name": "col_1770687360_549bb98b",
                     "state": 1,
-                    "type": 0
-                }
+                    "type": 0,
+                },
             ),
-            
             # ========== 测试知识库 ==========
             KnowledgeBaseDefinition(
                 id=9,
@@ -153,8 +153,8 @@ class KnowledgeAgent:
                     "collection_name": "col_1772076951_e3a04132",
                     "index_name": "col_1772076951_e3a04132",
                     "state": 1,
-                    "type": 0
-                }
+                    "type": 0,
+                },
             ),
             KnowledgeBaseDefinition(
                 id=10,
@@ -168,10 +168,9 @@ class KnowledgeAgent:
                     "collection_name": "col_1772439817_8bb38ba4",
                     "index_name": "col_1772439817_8bb38ba4",
                     "state": 1,
-                    "type": 0
-                }
+                    "type": 0,
+                },
             ),
-            
             # ========== 其他知识库 ==========
             KnowledgeBaseDefinition(
                 id=4,
@@ -185,8 +184,8 @@ class KnowledgeAgent:
                     "collection_name": "col_1770619074_795e525e",
                     "index_name": "col_1770619074_795e525e",
                     "state": 1,
-                    "type": 0
-                }
+                    "type": 0,
+                },
             ),
         ]
 
@@ -201,7 +200,7 @@ class KnowledgeAgent:
             KnowledgeMatch: 知识库匹配结果
         """
         logger.info("开始知识库匹配")
-        
+
         # 如果不需要知识库，直接返回空结果
         if not intent.needs_knowledge:
             logger.info("用户需求不需要检索知识库")
@@ -223,11 +222,9 @@ class KnowledgeAgent:
         )
 
         # 解析响应
-        import json
-
-        try:
-            result = json.loads(response.content)
-        except:
+        result = extract_json(response.content)
+        if result is None:
+            logger.error(f"LLM 响应 JSON 提取/解析失败。原始响应：{response.content}")
             result = {}
 
         # 获取匹配的知识库
@@ -235,14 +232,16 @@ class KnowledgeAgent:
         matched_knowledge_bases = [
             kb for kb in self.knowledge_catalog if kb.id in matched_kb_ids
         ]
-        
+
         logger.info(f"LLM 匹配到 {len(matched_kb_ids)} 个知识库：{matched_kb_ids}")
 
         # 如果没有匹配到任何知识库，但有知识库需求，返回最相关的 Top-2
         # TODO: 这里后续可以使用 embedding 进行语义匹配
         if not matched_knowledge_bases and intent.needs_knowledge:
             logger.warning("LLM 未匹配到任何知识库，使用默认 Top-2 知识库")
-            matched_knowledge_bases = self.knowledge_catalog[:2]  # 临时方案：返回前 2 个
+            matched_knowledge_bases = self.knowledge_catalog[
+                :2
+            ]  # 临时方案：返回前 2 个
 
         # 生成检索配置
         retrieval_config = result.get("retrieval_config", {})
@@ -255,9 +254,11 @@ class KnowledgeAgent:
 
         # 计算相似度分数（简化版本，TODO: 后续使用实际的向量相似度）
         similarity_score = 0.8 if matched_knowledge_bases else 0.0
-        
+
         kb_names = [kb.name for kb in matched_knowledge_bases]
-        logger.info(f"知识库匹配完成：匹配到 {len(matched_knowledge_bases)} 个知识库 [{', '.join(kb_names)}], 相似度={similarity_score:.2f}")
+        logger.info(
+            f"知识库匹配完成：匹配到 {len(matched_knowledge_bases)} 个知识库 [{', '.join(kb_names)}], 相似度={similarity_score:.2f}"
+        )
 
         return KnowledgeMatch(
             required=True,
