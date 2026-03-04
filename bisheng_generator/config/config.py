@@ -48,9 +48,17 @@ class Config(BaseModel):
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"), description="日志级别"
     )
 
-    # 毕昇平台配置
+    # 毕昇平台配置（知识库列表等接口）
+    bisheng_base_url: str = Field(
+        default_factory=lambda: os.getenv("BISHENG_BASE_URL", "http://localhost:3001"),
+        description="毕昇接口域名，用于获取知识库列表等",
+    )
+    bisheng_access_token: str = Field(
+        default_factory=lambda: os.getenv("BISHENG_ACCESS_TOKEN", ""),
+        description="毕昇 access_token（Cookie 中的 JWT），用于鉴权",
+    )
     bisheng_api_url: str = Field(
-        default="http://localhost:7860", description="毕昇 API 地址"
+        default="http://localhost:7860", description="毕昇 API 地址（兼容旧配置）"
     )
     bisheng_api_key: Optional[str] = Field(default=None, description="毕昇 API Key")
 

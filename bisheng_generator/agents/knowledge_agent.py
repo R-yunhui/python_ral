@@ -2,7 +2,7 @@
 知识库匹配 Agent
 
 职责：
-1. 加载可用知识库清单
+1. 从毕昇接口异步加载可用知识库清单（项目启动时调用）
 2. 根据意图匹配知识库（基于 LLM 语义匹配）
 3. 配置检索参数
 4. 分析知识库权限
@@ -10,6 +10,7 @@
 
 import logging
 from typing import List, Dict, Any, Optional
+import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain_core.prompts import ChatPromptTemplate
@@ -18,6 +19,9 @@ from models.intent import EnhancedIntent
 from core.utils import extract_json
 
 logger = logging.getLogger(__name__)
+
+# 毕昇知识库列表接口分页大小
+KNOWLEDGE_PAGE_SIZE = 20
 
 
 class KnowledgeBaseDefinition(BaseModel):
@@ -63,9 +67,8 @@ class KnowledgeAgent:
         self.llm = llm
         self.embedding = embedding
 
-        # 预定义的知识库清单（模拟毕昇平台的知识库）
-        # TODO: 后续可以从数据库动态加载，或使用 embedding 进行语义匹配
-        self.knowledge_catalog = self._init_knowledge_catalog()
+        # 知识库清单：由 load_knowledge_catalog() 在项目启动时从毕昇接口异步加载
+        self.knowledge_catalog: List[KnowledgeBaseDefinition] = []
 
         # 知识库匹配提示词
         self.match_prompt = ChatPromptTemplate.from_messages(
@@ -102,92 +105,98 @@ class KnowledgeAgent:
             ]
         )
 
-    def _init_knowledge_catalog(self) -> List[KnowledgeBaseDefinition]:
-        """
-        初始化知识库清单
+    def _parse_knowledge_item(self, item: Dict[str, Any]) -> KnowledgeBaseDefinition:
+        """将毕昇接口单条知识库数据解析为 KnowledgeBaseDefinition"""
+        name = item.get("name") or ""
+        desc = item.get("description") or ""
+        extra = {
+            "model": item.get("model"),
+            "collection_name": item.get("collection_name"),
+            "index_name": item.get("index_name"),
+            "state": item.get("state"),
+            "type": item.get("type"),
+        }
+        return KnowledgeBaseDefinition(
+            id=item.get("id"),
+            name=name,
+            desc=desc,
+            document_count=0,  # 接口未返回文档数
+            owner=item.get("user_name"),
+            tags=[],  # 接口未返回标签，可后续从 description 解析
+            extra=extra,
+        )
 
-        基于毕昇平台现有的真实知识库
+    async def load_knowledge_catalog(
+        self,
+        base_url: str,
+        access_token: str = "",
+    ) -> None:
         """
-        return [
-            # ========== 深汕合作区政策类知识库 ==========
-            KnowledgeBaseDefinition(
-                id=6,
-                name="招商引资相关政策",
-                desc="当回答与招商引资相关政策相关的问题时，参考此知识库",
-                document_count=0,  # 文档数待获取
-                owner="admin",
-                tags=["招商", "投资", "政策", "优惠"],
-                extra={
-                    "model": "6",
-                    "collection_name": "col_1770633881_0d9d02fb",
-                    "index_name": "col_1770633881_0d9d02fb",
-                    "state": 1,
-                    "type": 0,
-                },
-            ),
-            KnowledgeBaseDefinition(
-                id=7,
-                name="深汕海洋产业",
-                desc="深汕海洋产业相关知识库",
-                document_count=0,  # 文档数待获取
-                owner="admin",
-                tags=["海洋", "产业", "深汕", "经济"],
-                extra={
-                    "model": "6",
-                    "collection_name": "col_1770687360_549bb98b",
-                    "index_name": "col_1770687360_549bb98b",
-                    "state": 1,
-                    "type": 0,
-                },
-            ),
-            # ========== 测试知识库 ==========
-            KnowledgeBaseDefinition(
-                id=9,
-                name="test4",
-                desc="当回答与 test4 相关的问题时，参考此知识库",
-                document_count=0,  # 文档数待获取
-                owner="admin",
-                tags=["test4", "测试"],
-                extra={
-                    "model": "6",
-                    "collection_name": "col_1772076951_e3a04132",
-                    "index_name": "col_1772076951_e3a04132",
-                    "state": 1,
-                    "type": 0,
-                },
-            ),
-            KnowledgeBaseDefinition(
-                id=10,
-                name="test4 副本",
-                desc="当回答与 test4 相关的问题时，参考此知识库",
-                document_count=0,  # 文档数待获取
-                owner="admin",
-                tags=["test4", "测试"],
-                extra={
-                    "model": "6",
-                    "collection_name": "col_1772439817_8bb38ba4",
-                    "index_name": "col_1772439817_8bb38ba4",
-                    "state": 1,
-                    "type": 0,
-                },
-            ),
-            # ========== 其他知识库 ==========
-            KnowledgeBaseDefinition(
-                id=4,
-                name="AI 手表",
-                desc="AI 手表相关知识库",
-                document_count=0,  # 文档数待获取
-                owner="admin",
-                tags=["AI", "手表", "智能硬件"],
-                extra={
-                    "model": "6",
-                    "collection_name": "col_1770619074_795e525e",
-                    "index_name": "col_1770619074_795e525e",
-                    "state": 1,
-                    "type": 0,
-                },
-            ),
-        ]
+        从毕昇接口异步加载知识库列表（协程），应在项目启动时调用一次。
+
+        接口：GET {base_url}/api/v1/knowledge?page_num=1&page_size=20&name=&type=0
+        鉴权：Cookie 中 access_token_cookie（JWT）
+        """
+        base_url = (base_url or "").rstrip("/")
+        if not base_url:
+            logger.warning("毕昇 base_url 为空，跳过知识库加载")
+            return
+
+        all_items: List[KnowledgeBaseDefinition] = []
+        page_num = 1
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                while True:
+                    url = (
+                        f"{base_url}/api/v1/knowledge"
+                        f"?page_num={page_num}&page_size={KNOWLEDGE_PAGE_SIZE}&name=&type=0"
+                    )
+                    headers = {"Accept": "application/json"}
+                    if access_token:
+                        headers["Cookie"] = (
+                            f"lang=zh-Hans; access_token_cookie={access_token}"
+                        )
+
+                    resp = await client.get(url, headers=headers)
+
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "毕昇知识库接口请求失败: status=%s, body=%s",
+                            resp.status_code,
+                            resp.text[:500],
+                        )
+                        break
+
+                    body = resp.json()
+                    if body.get("status_code") != 200:
+                        logger.warning(
+                            "毕昇知识库接口返回错误: %s",
+                            body.get("status_message", body),
+                        )
+                        break
+
+                    data = body.get("data") or {}
+                    raw_list = data.get("data") or []
+                    total = data.get("total") or 0
+
+                    for raw in raw_list:
+                        if isinstance(raw, dict):
+                            all_items.append(self._parse_knowledge_item(raw))
+
+                    if len(raw_list) < KNOWLEDGE_PAGE_SIZE or len(all_items) >= total:
+                        break
+                    page_num += 1
+
+            self.knowledge_catalog = all_items
+            logger.info(
+                "知识库加载完成：从毕昇接口加载 %d 个知识库",
+                len(self.knowledge_catalog),
+            )
+        except httpx.RequestError as e:
+            logger.warning("请求毕昇知识库接口失败: %s", e)
+        except Exception as e:
+            logger.exception("加载知识库列表异常: %s", e)
 
     async def match_knowledge(self, intent: EnhancedIntent) -> KnowledgeMatch:
         """
@@ -205,6 +214,14 @@ class KnowledgeAgent:
         if not intent.needs_knowledge:
             logger.info("用户需求不需要检索知识库")
             return KnowledgeMatch(required=False, reasoning="用户需求不需要检索知识库")
+
+        if not self.knowledge_catalog:
+            logger.warning("知识库列表为空（未加载或加载失败），跳过匹配")
+            return KnowledgeMatch(
+                required=True,
+                matched_knowledge_bases=[],
+                reasoning="知识库列表未加载或为空",
+            )
 
         # 生成知识库清单描述
         logger.info("格式化可用知识库清单")

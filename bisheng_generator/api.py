@@ -25,14 +25,17 @@ import json
 from pathlib import Path
 from asyncio import Queue
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from contextlib import asynccontextmanager
+
 from config.config import config
-from core.graph import WorkflowOrchestrator
+from core.graph import WorkflowOrchestrator, ModelInitializer
+from agents.knowledge_agent import KnowledgeAgent
 from main import save_workflow
 from models.progress import ProgressEvent, ProgressEventType
 
@@ -81,11 +84,39 @@ root_logger.addHandler(utf8_handler)
 
 logger = logging.getLogger(__name__)
 
-# 创建 FastAPI 应用
+async def _load_knowledge_catalog_at_startup(app_instance: FastAPI) -> None:
+    """应用启动时从毕昇接口异步加载知识库列表，供后续请求复用。"""
+    try:
+        llm = ModelInitializer.get_llm(config)
+        embedding = ModelInitializer.get_embedding(config)
+        agent = KnowledgeAgent(llm, embedding)
+        await agent.load_knowledge_catalog(
+            base_url=config.bisheng_base_url,
+            access_token=getattr(config, "bisheng_access_token", "") or "",
+        )
+        app_instance.state.knowledge_catalog = getattr(agent, "knowledge_catalog", [])
+        logger.info(
+            "启动时知识库加载完成，共 %d 个",
+            len(app_instance.state.knowledge_catalog),
+        )
+    except Exception as e:
+        logger.warning("启动时加载知识库失败（将使用空列表）: %s", e)
+        app_instance.state.knowledge_catalog = []
+
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    """FastAPI 生命周期：启动时加载知识库列表。"""
+    await _load_knowledge_catalog_at_startup(app_instance)
+    yield
+
+
+# 创建 FastAPI 应用（带 lifespan，启动时加载知识库）
 app = FastAPI(
     title="毕昇工作流生成器 API",
     description="提供工作流生成、查看和下载的 API 接口",
     version="0.2.0",
+    lifespan=lifespan,
 )
 
 # 配置 CORS（允许前端访问）
@@ -138,13 +169,20 @@ async def root():
         raise HTTPException(status_code=500, detail=f"读取页面失败：{str(e)}")
 
 
+def _inject_knowledge_catalog(orchestrator: WorkflowOrchestrator, catalog: list) -> None:
+    """将启动时加载的知识库列表注入编排器，供本次请求使用。"""
+    if catalog is not None and len(catalog) > 0:
+        orchestrator.knowledge_agent.knowledge_catalog = catalog
+
+
 @app.post("/api/generate", response_model=GenerateResponse)
-async def generate_workflow(request: GenerateRequest):
+async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
     """
     生成工作流
 
     Args:
         request: 生成请求，包含用户查询
+        fastapi_request: FastAPI 请求对象，用于读取启动时加载的知识库
 
     Returns:
         生成的工作流
@@ -154,6 +192,10 @@ async def generate_workflow(request: GenerateRequest):
     try:
         # 创建编排器
         orchestrator = WorkflowOrchestrator(request.config)
+        _inject_knowledge_catalog(
+            orchestrator,
+            getattr(fastapi_request.app.state, "knowledge_catalog", None) or [],
+        )
 
         # 生成工作流
         result = await orchestrator.generate(request.query)
@@ -255,7 +297,9 @@ async def health_check():
 @app.post("/api/generate/stream")
 @app.get("/api/generate/stream")  # 同时支持 GET 请求（用于浏览器直接访问）
 async def generate_workflow_stream(
-    request: Optional[GenerateRequest] = None, query: Optional[str] = None
+    fastapi_request: Request,
+    request: Optional[GenerateRequest] = None,
+    query: Optional[str] = None,
 ):
     """
     生成工作流（流式 SSE 版本）
@@ -315,9 +359,14 @@ async def generate_workflow_stream(
             # 等待一小段时间，确保客户端已接收
             await asyncio.sleep(0.1)
 
-            # 启动生成任务
+            # 启动生成任务（注入启动时加载的知识库列表）
+            knowledge_catalog = getattr(
+                fastapi_request.app.state, "knowledge_catalog", None
+            ) or []
             generate_task = asyncio.create_task(
-                run_generation(user_query, request_config, progress_callback)
+                run_generation(
+                    user_query, request_config, progress_callback, knowledge_catalog
+                )
             )
             logger.info("生成任务已启动，等待事件...")
 
@@ -401,7 +450,12 @@ async def generate_workflow_stream(
     return response
 
 
-async def run_generation(query: str, config: Optional[dict], progress_callback) -> dict:
+async def run_generation(
+    query: str,
+    config: Optional[dict],
+    progress_callback,
+    knowledge_catalog: Optional[list] = None,
+) -> dict:
     """
     执行生成任务
 
@@ -409,6 +463,7 @@ async def run_generation(query: str, config: Optional[dict], progress_callback) 
         query: 用户查询
         config: 配置
         progress_callback: 进度回调
+        knowledge_catalog: 启动时加载的知识库列表（可选），注入到编排器
 
     Returns:
         生成结果
@@ -420,6 +475,7 @@ async def run_generation(query: str, config: Optional[dict], progress_callback) 
         orchestrator = WorkflowOrchestrator(
             config_obj=config, progress_callback=progress_callback
         )
+        _inject_knowledge_catalog(orchestrator, knowledge_catalog or [])
 
         # 生成工作流
         logger.info("[run_generation] 调用 generate_with_progress...")

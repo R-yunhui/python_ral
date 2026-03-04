@@ -152,6 +152,16 @@ class WorkflowOrchestrator:
 
         logger.info("WorkflowOrchestrator 初始化完成")
 
+    async def initialize(self) -> None:
+        """
+        异步初始化：在项目启动时调用一次，从毕昇接口加载知识库列表。
+        使用协程方式请求，不阻塞主流程。
+        """
+        await self.knowledge_agent.load_knowledge_catalog(
+            base_url=self.config.bisheng_base_url,
+            access_token=getattr(self.config, "bisheng_access_token", "") or "",
+        )
+
     def _build_graph(self) -> StateGraph:
         """
         构建 LangGraph 工作流（支持条件流转）

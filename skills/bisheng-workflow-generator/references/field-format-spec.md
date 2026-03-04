@@ -151,27 +151,44 @@
 
 ### Input 节点
 **必需字段**：
-- [ ] `tab` (必须包含 2 个 options: dialog_input 和 form_input)
+- [ ] `tab` (必须包含 2 个 options: dialog_input 和 form_input，options 里含 `help: "true"`)
+- [ ] `description` 必须为 `"接收用户在会话页面的输入，支持 2 种形式：对话框输入，表单输入。"`
 - [ ] `user_input` (tab: dialog_input, type: var, label: "true", global: "key")
+- [ ] 文件上传分组 (groupKey: "inputfile"，含 user_input_file、file_parse_mode、dialog_files_content 等 7 个字段)
+- [ ] 推荐问题分组 (groupKey: "custom"，含 recommended_questions_flag、recommended_llm、recommended_system_prompt、recommended_history_num)
+- [ ] 表单输入分组 (含 form_input，tab: form_input，global: "item:form_input")
 
 **常见错误**：
-❌ tab 的 options 少于 2 个
-❌ user_input 缺少 global: "key"
+❌ group_params 只有 `接收文本` 一个分组
+❌ 缺少文件上传分组（user_input_file 等字段）
+❌ 缺少推荐问题分组（recommended_llm 等字段）
+❌ 缺少表单输入分组（form_input 字段）
+❌ description 写成简化版 `"接收用户在会话页面的输入。"`
+❌ measured.height 设为 268（正确值为 657）
 
 ---
 
 ### LLM 节点
 **必需字段**：
-- [ ] `tab` (必须包含 single 和 batch 两个 options)
+- [ ] `tab` (options 只含 `key` 和 `label`，**不含 `help`**)
+- [ ] `batch_variable` (在**第一个无名分组**中，不在输出分组)
 - [ ] `model_id` (type: bisheng_model, label: "true", required: true)
-- [ ] `user_prompt` (type: var_textarea, label: "true", required: true)
+- [ ] `user_prompt` (type: var_textarea, label: "true", required: true，含 varZh)
+- [ ] `image_prompt` (在提示词分组中，type: image_prompt, value: [])
 - [ ] `output` (type: var, label: "true", 必须包含 global 映射函数)
-- [ ] `batch_variable` (即使 single 模式也要定义)
+
+**group_params 正确顺序**：
+1. 无名分组：`batch_variable`
+2. 模型设置：`model_id`, `temperature`
+3. 提示词：`system_prompt`, `user_prompt`, `image_prompt`
+4. 输出：`output_user`, `output`
 
 **常见错误**：
+❌ tab.options 含有 `help: "true"` 字段
+❌ batch_variable 放在输出分组（应在第一个无名分组）
+❌ 提示词分组缺少 image_prompt
 ❌ output 字段缺少 global 映射函数
-❌ batch_variable 未定义（即使 single 模式）
-❌ tab 的 options 不完整
+❌ measured.height 设为 700（正确值为 836）
 
 ---
 
@@ -190,31 +207,40 @@
 
 ### Knowledge Retriever 节点
 **必需字段**：
-- [ ] `user_question` (type: user_question, label: "true", required: true)
+- [ ] `v` 字段为**整数** `2`（不是字符串 `"2"`）
+- [ ] `user_question` (type: user_question, label: "true", required: true，含 varZh、help、test、global、linkage)
   - value 必须引用上游变量：`["llm_xxx.output"]`
+  - varZh 必须对应说明变量中文名
+  - global: `"self=user_prompt"`，linkage: `"retrieved_result"`
 - [ ] `knowledge` (type: knowledge_select_multi, label: "true", required: true)
-  - 必须使用嵌套结构
-- [ ] `retrieved_result` (输出字段，type: var, label: "true")
+  - 必须使用嵌套结构：`{"type": "knowledge", "value": [...]}`
+- [ ] `metadata_filter` (type: metadata_filter, value: {"enabled": false})
+- [ ] `advanced_retrieval_switch` (type: search_switch，含 keyword_weight、vector_weight 等)
+- [ ] `retrieved_result` (输出字段，type: var，value 为 `[{"key": "retrieved_output", "label": "retrieved_output"}]`)
   - 必须包含 global 映射函数
 
 **常见错误**：
+❌ v 字段写成字符串 `"2"`（应为整数 `2`）
 ❌ knowledge 字段未使用嵌套结构
-❌ user_question 未引用上游变量
-❌ retrieved_result 缺少 global 映射
+❌ user_question 缺少 varZh、global、linkage 字段
+❌ 缺少 metadata_filter 或 advanced_retrieval_switch
+❌ retrieved_result 的 value 写成 `[{"key": "xxx", "label": "检索结果"}]`（label 应为 "retrieved_output"）
 
 ---
 
 ### Condition 节点
 **必需字段**：
 - [ ] `condition` (type: condition, label: "true", required: true)
-  - value 必须是数组，每个元素包含：
-    - `id`: 条件 ID（用于边连接）
+  - `value` 数组中**只放有实际条件的分支**，每个元素包含：
+    - `id`: 分支 ID（对应出边的 sourceHandle）
     - `operator`: "and" 或 "or"
-    - `conditions`: 条件数组
+    - `conditions`: 条件数组（**不可为空**）
+  - 兜底（else）分支**不写入 value 数组**，用 `right_handle` 出边表示
 
 **常见错误**：
-❌ condition 的 value 不是数组
+❌ 在 value 末尾加 `{"id": "default_branch", "conditions": []}` → 报「条件分支不可为空」
 ❌ 条件缺少 id 字段（无法连接边）
+❌ comparison_operation 使用 equals 匹配 LLM 输出 → 改用 contains
 ❌ comparison_operation 拼写错误
 
 ---
