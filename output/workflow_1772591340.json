@@ -1,16 +1,16 @@
 {
   "status": 2,
   "user_id": 1,
-  "description": "支持查询指定城市和日期天气信息的助手，通过联网搜索获取实时天气数据。",
+  "description": "天气查询工作流，通过联网搜索获取实时天气信息并返回给用户",
   "name": "天气查询助手",
   "flow_type": 10,
-  "id": "weather_query_7f8e9d2c3b4a5f6e",
+  "id": "weather_flow_8a7b6c5d4e3f2g1h",
   "nodes": [
     {
-      "id": "start_a1b2c",
+      "id": "start_w1a2b",
       "data": {
         "v": "3",
-        "id": "start_a1b2c",
+        "id": "start_w1a2b",
         "name": "开始",
         "type": "start",
         "description": "工作流运行的起始节点。",
@@ -22,7 +22,7 @@
                 "key": "guide_word",
                 "type": "textarea",
                 "label": "true",
-                "value": "您好！我是天气查询助手，可以帮您查询指定城市和日期的天气信息。请告诉我您想查询哪个城市、哪一天的天气？",
+                "value": "您好！我是天气查询助手，可以帮您查询全国各地的实时天气信息。请告诉我您想查询哪个城市的天气？",
                 "placeholder": "true"
               },
               {
@@ -32,7 +32,7 @@
                 "value": [
                   "北京今天天气怎么样？",
                   "上海明天会下雨吗？",
-                  "广州周末的天气如何？"
+                  "广州未来三天的天气预报"
                 ],
                 "placeholder": "true"
               }
@@ -74,10 +74,6 @@
                   {
                     "key": "pq_002",
                     "value": "上海明天会下雨吗？"
-                  },
-                  {
-                    "key": "pq_003",
-                    "value": "广州周末的天气如何？"
                   }
                 ],
                 "global": "item:input_list",
@@ -106,10 +102,10 @@
       }
     },
     {
-      "id": "input_b3d4e",
+      "id": "input_w3c4d",
       "data": {
         "v": "3",
-        "id": "input_b3d4e",
+        "id": "input_w3c4d",
         "name": "输入",
         "type": "input",
         "description": "接收用户在会话页面的输入。",
@@ -137,7 +133,8 @@
                 "tab": "dialog_input",
                 "type": "var",
                 "label": "true",
-                "global": "key"
+                "global": "key",
+                "value": ""
               }
             ]
           }
@@ -154,10 +151,10 @@
       }
     },
     {
-      "id": "tool_c5f6g",
+      "id": "tool_w5e6f",
       "data": {
         "v": "2",
-        "id": "tool_c5f6g",
+        "id": "tool_w5e6f",
         "name": "联网搜索",
         "type": "tool",
         "tool_key": "web_search",
@@ -171,7 +168,7 @@
                 "test": "var",
                 "type": "var_textarea",
                 "label": "true",
-                "value": "{{#input_b3d4e.user_input#}} 天气查询",
+                "value": "{{#input_w3c4d.user_input#}} 实时天气",
                 "required": true,
                 "placeholder": "true"
               }
@@ -184,7 +181,8 @@
                 "key": "output",
                 "type": "var",
                 "label": "true",
-                "global": "key"
+                "global": "key",
+                "value": ""
               }
             ]
           }
@@ -201,13 +199,13 @@
       }
     },
     {
-      "id": "llm_d7h8i",
+      "id": "llm_w7g8h",
       "data": {
         "v": "2",
-        "id": "llm_d7h8i",
+        "id": "llm_w7g8h",
         "name": "天气信息整理",
         "type": "llm",
-        "description": "整理联网搜索的天气信息，生成友好的回复。",
+        "description": "整理联网搜索获取的天气信息，以清晰友好的格式呈现给用户。",
         "tab": {
           "value": "single",
           "options": [
@@ -234,6 +232,17 @@
                 "value": 5,
                 "required": true,
                 "placeholder": "true"
+              },
+              {
+                "key": "temperature",
+                "step": 0.1,
+                "type": "slide",
+                "label": "true",
+                "scope": [
+                  0,
+                  2
+                ],
+                "value": 0.3
               }
             ]
           },
@@ -245,14 +254,14 @@
                 "test": "var",
                 "type": "var_textarea",
                 "label": "true",
-                "value": "你是一个专业的天气查询助手。请根据搜索到的天气信息，整理成清晰、友好的回复格式。\n\n回复要求：\n1. 明确说明查询的城市和日期\n2. 列出关键天气信息（温度、天气状况、降水概率、风力等）\n3. 如有特殊天气（如暴雨、高温、寒潮等），给出温馨提示\n4. 语言简洁明了，便于用户快速阅读\n5. 如果搜索不到相关信息，礼貌告知用户并建议重新查询"
+                "value": "你是一个专业的天气信息助手。请根据用户查询和搜索结果，整理出清晰、准确的天气信息。包括：温度、天气状况、湿度、风力等关键信息。用友好、简洁的语言回复。"
               },
               {
                 "key": "user_prompt",
                 "test": "var",
                 "type": "var_textarea",
                 "label": "true",
-                "value": "用户查询：{{#input_b3d4e.user_input#}}\n\n搜索结果：{{#tool_c5f6g.output#}}\n\n请整理以上信息，生成友好的天气查询回复。",
+                "value": "用户查询：{{#input_w3c4d.user_input#}}\n\n搜索结果：{{#tool_w5e6f.output#}}\n\n请整理以上信息，给用户一个清晰的天气回复。",
                 "required": true
               }
             ]
@@ -303,10 +312,10 @@
       }
     },
     {
-      "id": "output_e9j0k",
+      "id": "output_w9i0j",
       "data": {
         "v": "2",
-        "id": "output_e9j0k",
+        "id": "output_w9i0j",
         "name": "输出",
         "type": "output",
         "description": "向用户发送天气查询结果。",
@@ -318,11 +327,11 @@
                 "type": "var_textarea_file",
                 "label": "true",
                 "value": {
-                  "msg": "{{#llm_d7h8i.output#}}",
+                  "msg": "{{#llm_w7g8h.output#}}",
                   "files": []
                 },
                 "varZh": {
-                  "llm_d7h8i.output": "天气信息整理/output"
+                  "llm_w7g8h.output": "天气信息整理/output"
                 },
                 "global": "key",
                 "required": true,
@@ -357,46 +366,46 @@
   ],
   "edges": [
     {
-      "id": "xy-edge__start_a1b2c_right_handle-input_b3d4e_left_handle",
+      "id": "xy-edge__start_w1a2b_right_handle-input_w3c4d_left_handle",
       "type": "customEdge",
-      "source": "start_a1b2c",
-      "target": "input_b3d4e",
+      "source": "start_w1a2b",
+      "target": "input_w3c4d",
       "sourceHandle": "right_handle",
       "targetHandle": "left_handle",
       "animated": true
     },
     {
-      "id": "xy-edge__input_b3d4e_right_handle-tool_c5f6g_left_handle",
+      "id": "xy-edge__input_w3c4d_right_handle-tool_w5e6f_left_handle",
       "type": "customEdge",
-      "source": "input_b3d4e",
-      "target": "tool_c5f6g",
+      "source": "input_w3c4d",
+      "target": "tool_w5e6f",
       "sourceHandle": "right_handle",
       "targetHandle": "left_handle",
       "animated": true
     },
     {
-      "id": "xy-edge__tool_c5f6g_right_handle-llm_d7h8i_left_handle",
+      "id": "xy-edge__tool_w5e6f_right_handle-llm_w7g8h_left_handle",
       "type": "customEdge",
-      "source": "tool_c5f6g",
-      "target": "llm_d7h8i",
+      "source": "tool_w5e6f",
+      "target": "llm_w7g8h",
       "sourceHandle": "right_handle",
       "targetHandle": "left_handle",
       "animated": true
     },
     {
-      "id": "xy-edge__llm_d7h8i_right_handle-output_e9j0k_left_handle",
+      "id": "xy-edge__llm_w7g8h_right_handle-output_w9i0j_left_handle",
       "type": "customEdge",
-      "source": "llm_d7h8i",
-      "target": "output_e9j0k",
+      "source": "llm_w7g8h",
+      "target": "output_w9i0j",
       "sourceHandle": "right_handle",
       "targetHandle": "left_handle",
       "animated": true
     },
     {
-      "id": "xy-edge__output_e9j0k_right_handle-input_b3d4e_left_handle",
+      "id": "xy-edge__output_w9i0j_right_handle-input_w3c4d_left_handle",
       "type": "customEdge",
-      "source": "output_e9j0k",
-      "target": "input_b3d4e",
+      "source": "output_w9i0j",
+      "target": "input_w3c4d",
       "sourceHandle": "right_handle",
       "targetHandle": "left_handle",
       "animated": true
@@ -406,5 +415,9 @@
     "x": 400,
     "y": 300,
     "zoom": 0.5
-  }
+  },
+  "guide_word": "您好！我是天气查询助手，可以帮您查询全国各地的实时天气信息。请告诉我您想查询哪个城市的天气？",
+  "create_time": "2026-03-04T02:29:00",
+  "update_time": "2026-03-04T02:29:00",
+  "logo": ""
 }

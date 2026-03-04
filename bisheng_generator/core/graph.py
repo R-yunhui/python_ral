@@ -319,7 +319,7 @@ class WorkflowOrchestrator:
             event_data = {
                 "tools_count": len(tool_plan.selected_tools),
                 "selected_tools": [
-                    {"name": t.name, "description": t.description}
+                    {"name": t.name, "description": t.desc}
                     for t in tool_plan.selected_tools
                 ] if tool_plan.selected_tools else []
             }
@@ -378,7 +378,7 @@ class WorkflowOrchestrator:
             event_data = {
                 "knowledge_count": len(knowledge_match.matched_knowledge_bases),
                 "matched_knowledge_bases": [
-                    {"name": kb.name, "description": kb.description}
+                    {"name": kb.name, "description": kb.desc}
                     for kb in knowledge_match.matched_knowledge_bases
                 ] if knowledge_match.matched_knowledge_bases else []
             }
@@ -552,32 +552,42 @@ class WorkflowOrchestrator:
         Returns:
             生成的工作流
         """
-        logger.info(f"收到用户输入（流式模式）：{user_input}")
+        logger.info(f"[generate_with_progress] 开始，user_input={user_input}")
         
         # 设置进度回调
         self.progress_callback = progress_callback
+        logger.info(f"[generate_with_progress] 已设置进度回调")
         
         # 发送开始事件
+        logger.info(f"[generate_with_progress] 发送开始事件")
         await self._emit_progress(
             ProgressEvent.create_start_event(user_input)
         )
+        logger.info(f"[generate_with_progress] 开始事件已发送")
         
         # 调用普通生成方法（内部会触发进度回调）
+        logger.info(f"[generate_with_progress] 调用 generate 方法，等待执行...")
         result = await self.generate(user_input)
+        logger.info(f"[generate_with_progress] generate 方法返回，status={result.get('status')}")
         
         # 发送完成或错误事件
         if result.get("status") == "success":
+            logger.info(f"[generate_with_progress] 发送完成事件")
             await self._emit_progress(
                 ProgressEvent.create_complete_event(
                     result.get("workflow", {}),
                     result.get("metadata", {})
                 )
             )
+            logger.info(f"[generate_with_progress] 完成事件已发送")
         else:
+            logger.info(f"[generate_with_progress] 发送错误事件：{result.get('message')}")
             await self._emit_progress(
                 ProgressEvent.create_error_event(result.get("message", "未知错误"))
             )
+            logger.info(f"[generate_with_progress] 错误事件已发送")
         
+        logger.info(f"[generate_with_progress] 返回结果")
         return result
     
     async def _emit_progress(self, event: ProgressEvent) -> None:

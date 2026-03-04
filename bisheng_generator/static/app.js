@@ -71,110 +71,65 @@ async function handleGenerate() {
 // 使用 SSE 进行流式生成
 async function generateWithSSE(query) {
     return new Promise((resolve, reject) => {
-        // 创建 SSE 连接
-        const eventSource = new EventSource('/api/generate/stream', {
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
+        // 使用 URL 查询参数传递 query（EventSource 不支持自定义 headers）
+        const url = `/api/generate/stream?query=${encodeURIComponent(query)}`;
+        const eventSource = new EventSource(url);
 
         let isComplete = false;
 
-        // 监听进度事件
-        eventSource.addEventListener('progress', (event) => {
+        // 统一消息处理器
+        const handleMessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                handleProgressEvent(data);
-            } catch (err) {
-                console.error('解析进度事件失败:', err);
-            }
-        });
-
-        // 监听最终结果事件
-        eventSource.addEventListener('final_result', (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                isComplete = true;
+                console.log('收到 SSE 消息:', data.event_type, data.message);
                 
-                // 关闭连接
-                eventSource.close();
-                
-                // 隐藏加载动画
-                hideLoading();
-                hideProgress();
-                
-                // 显示结果
-                if (data.status === 'success') {
-                    showResult(data);
+                // 根据事件类型处理
+                if (data.event_type === 'complete') {
+                    // 完成事件
+                    isComplete = true;
+                    eventSource.close();
+                    hideLoading();
+                    hideProgress();
+                    
+                    if (data.data && data.data.status === 'success') {
+                        showResult(data.data);
+                    } else {
+                        showError(data.message || '生成失败');
+                    }
+                    disableGenerateBtn(false);
+                    resolve();
+                } else if (data.event_type === 'error') {
+                    // 错误事件
+                    isComplete = true;
+                    eventSource.close();
+                    hideLoading();
+                    hideProgress();
+                    showError(data.message || data.error || '生成失败');
+                    disableGenerateBtn(false);
+                    reject(new Error(data.message || data.error || '生成失败'));
                 } else {
-                    showError(data.message || '生成失败');
+                    // 进度事件（start, agent_start, agent_complete 等）
+                    handleProgressEvent(data);
                 }
-                
-                // 启用按钮
-                disableGenerateBtn(false);
-                
-                resolve();
             } catch (err) {
-                console.error('解析最终结果失败:', err);
+                console.error('解析 SSE 消息失败:', err);
                 reject(err);
             }
-        });
+        };
 
-        // 监听错误事件
-        eventSource.addEventListener('error', (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                isComplete = true;
-                
-                // 关闭连接
-                eventSource.close();
-                
-                // 隐藏加载动画
-                hideLoading();
-                hideProgress();
-                
-                // 显示错误
-                showError(data.message || data.error || '生成失败');
-                
-                // 启用按钮
-                disableGenerateBtn(false);
-                
-                reject(new Error(data.message || data.error || '生成失败'));
-            } catch (err) {
-                console.error('解析错误事件失败:', err);
-                reject(err);
-            }
-        });
+        // 监听所有消息（标准 SSE onmessage）
+        eventSource.onmessage = handleMessage;
 
         // 连接错误处理
         eventSource.onerror = (err) => {
+            console.error('SSE 连接错误:', err);
             if (!isComplete) {
-                console.error('SSE 连接错误:', err);
-                eventSource.close();
                 hideLoading();
                 hideProgress();
                 disableGenerateBtn(false);
                 reject(new Error('连接服务器失败'));
             }
         };
-
-        // 发送生成请求
-        fetch('/api/generate/stream', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ query })
-        }).catch((err) => {
-            console.error('发送请求失败:', err);
-            if (!isComplete) {
-                eventSource.close();
-                hideLoading();
-                hideProgress();
-                disableGenerateBtn(false);
-                reject(err);
-            }
-        });
     });
 }
 

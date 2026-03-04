@@ -1,29 +1,75 @@
 """毕昇工作流生成器 - FastAPI 接口"""
 
+# ========== 必须在所有 import 之前设置 UTF-8 编码 ==========
+import sys
+import io
+
+# 解决 Windows 控制台中文乱码问题：强制设置标准输出为 UTF-8
+if sys.platform == 'win32':
+    # Windows 系统需要特殊处理
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
+    # 设置环境变量，让后续的子进程也使用 UTF-8
+    import os
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+    os.environ['PYTHONUTF8'] = '1'
+
 import logging
 from typing import Optional, AsyncGenerator
 import json
-import time
 from pathlib import Path
 from asyncio import Queue
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sse_starlette.sse import EventSourceResponse
 
 from config.config import config
 from core.graph import WorkflowOrchestrator
 from main import save_workflow
-from models.progress import ProgressEvent, StreamResponse
+from models.progress import ProgressEvent, ProgressEventType
 
-# 配置日志
-logging.basicConfig(
-    level=getattr(logging, config.log_level),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+# 配置日志 - 使用 UTF-8 编码的 StreamHandler
+class UTF8StreamHandler(logging.StreamHandler):
+    """自定义 StreamHandler，确保使用 UTF-8 编码"""
+    
+    def __init__(self, stream=None):
+        super().__init__(stream)
+        # 设置编码器为 UTF-8
+        self.setFormatter(logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt='%Y-%m-%d %H:%M:%S'
+        ))
+    
+    def emit(self, record):
+        """重写 emit 方法，确保使用 UTF-8 编码输出"""
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            # 确保使用 UTF-8 编码
+            if isinstance(stream, io.TextIOWrapper):
+                stream.write(msg + self.terminator)
+            else:
+                # 如果流不是 TextIOWrapper，尝试直接写入
+                stream.write(msg + self.terminator)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+# 配置根日志记录器
+root_logger = logging.getLogger()
+root_logger.setLevel(getattr(logging, config.log_level))
+
+# 移除所有已有的 handler
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+
+# 添加我们的 UTF-8 handler
+utf8_handler = UTF8StreamHandler(sys.stdout)
+root_logger.addHandler(utf8_handler)
+
 logger = logging.getLogger(__name__)
 
 # 创建 FastAPI 应用
@@ -202,17 +248,45 @@ async def health_check():
 
 
 @app.post("/api/generate/stream")
-async def generate_workflow_stream(request: GenerateRequest):
+@app.get("/api/generate/stream")  # 同时支持 GET 请求（用于浏览器直接访问）
+async def generate_workflow_stream(request: Optional[GenerateRequest] = None, query: Optional[str] = None):
     """
     生成工作流（流式 SSE 版本）
     
     Args:
-        request: 生成请求，包含用户查询
+        request: 生成请求，包含用户查询（POST 方式）
+        query: 查询参数（GET 方式）
     
     Returns:
         SSE 事件流，实时推送进度
     """
-    logger.info(f"收到流式生成请求：{request.query[:50]}...")
+    # 兼容 GET 和 POST 请求
+    user_query = ""
+    request_config = None
+    
+    if request:
+        # POST 请求
+        user_query = request.query
+        request_config = request.config
+        logger.info(f"收到流式生成请求（POST）：{user_query[:50]}...")
+    elif query:
+        # GET 请求
+        user_query = query
+        logger.info(f"收到流式生成请求（GET）：{user_query[:50]}...")
+    else:
+        # 返回错误
+        error_event = ProgressEvent(
+            event_type=ProgressEventType.ERROR,
+            message="缺少查询参数",
+            error="请提供 query 参数",
+            progress=0.0
+        )
+        async def error_generator():
+            yield f"event: error\ndata: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+        return StreamingResponse(
+            error_generator(),
+            media_type="text/event-stream"
+        )
     
     # 创建事件队列
     event_queue = Queue()
@@ -226,10 +300,20 @@ async def generate_workflow_stream(request: GenerateRequest):
     async def event_generator() -> AsyncGenerator[str, None]:
         """生成 SSE 事件"""
         try:
+            # 首先发送开始事件（使用标准 SSE 格式）
+            start_event = ProgressEvent.create_start_event(user_query)
+            logger.info(f"准备发送开始事件：{start_event.event_type.value}")
+            yield f"data: {json.dumps(start_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+            logger.info("已开始事件已发送")
+            
+            # 等待一小段时间，确保客户端已接收
+            await asyncio.sleep(0.1)
+            
             # 启动生成任务
             generate_task = asyncio.create_task(
-                run_generation(request.query, request.config, progress_callback)
+                run_generation(user_query, request_config, progress_callback)
             )
+            logger.info("生成任务已启动，等待事件...")
             
             # 持续从队列读取事件
             while True:
@@ -243,23 +327,31 @@ async def generate_workflow_stream(request: GenerateRequest):
                     
                     # 如果生成任务完成
                     if generate_task in done:
+                        logger.info("生成任务完成，准备发送最终结果")
                         result = generate_task.result()
-                        # 发送最终结果事件
+                        # 发送最终结果事件（使用 COMPLETE 事件类型）
                         final_event = ProgressEvent(
-                            event_type="final_result",
+                            event_type=ProgressEventType.COMPLETE,
                             message="生成完成",
-                            data=result
+                            data=result if result else {},
+                            progress=100.0
                         )
-                        yield f"event: final_result\ndata: {json.dumps(final_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                        # 标准 SSE 格式
+                        yield f"data: {json.dumps(final_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                        logger.info("已发送最终结果事件")
                         break
                     
-                    # 取消 pending 任务
+                    # 只取消 pending 的 get_task，不要取消 generate_task
                     for task in pending:
-                        task.cancel()
+                        if task is not generate_task:
+                            task.cancel()
                     
-                    # 获取并发送事件
+                    # 获取并发送事件（使用标准 SSE 格式，只使用 data: 字段）
                     event = get_task.result()
-                    yield f"event: progress\ndata: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                    logger.info(f"从队列获取到事件：{event.event_type.value} - {event.message[:50]}")
+                    # 标准 SSE 格式：data: {...}\n\n （不使用 event: 字段，让前端统一解析）
+                    yield f"data: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                    logger.info(f"已发送事件：{event.event_type.value}")
                     
                 except asyncio.CancelledError:
                     logger.warning("SSE 连接被取消")
@@ -271,7 +363,8 @@ async def generate_workflow_stream(request: GenerateRequest):
                         message=f"推送失败：{str(e)}",
                         error=str(e)
                     )
-                    yield f"event: error\ndata: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                    # 标准 SSE 格式
+                    yield f"data: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                     break
         
         except Exception as e:
@@ -281,18 +374,30 @@ async def generate_workflow_stream(request: GenerateRequest):
                 message=f"生成失败：{str(e)}",
                 error=str(e)
             )
-            yield f"event: error\ndata: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+            # 标准 SSE 格式
+            yield f"data: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
     
     # 返回 SSE 响应
-    return StreamingResponse(
+    response = StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # Nginx: 禁用缓冲
+            "X-Accel-Buffering": "no",  # Nginx: 禁用缓冲
+            "Transfer-Encoding": "chunked"
         }
     )
+    
+    # 确保响应不会被缓冲
+    from starlette.background import BackgroundTask
+    
+    async def cleanup():
+        """清理函数"""
+        pass
+    
+    response.background = BackgroundTask(cleanup)
+    return response
 
 
 async def run_generation(
@@ -311,18 +416,22 @@ async def run_generation(
     Returns:
         生成结果
     """
+    logger.info(f"[run_generation] 开始执行，query={query[:50]}")
     try:
         # 创建编排器
+        logger.info("[run_generation] 创建编排器...")
         orchestrator = WorkflowOrchestrator(
             config_obj=config,
             progress_callback=progress_callback
         )
         
         # 生成工作流
+        logger.info("[run_generation] 调用 generate_with_progress...")
         result = await orchestrator.generate_with_progress(
             user_input=query,
             progress_callback=progress_callback
         )
+        logger.info(f"[run_generation] generate_with_progress 返回，status={result.get('status')}")
         
         if result.get("status") == "success":
             # 保存工作流
@@ -332,6 +441,7 @@ async def run_generation(
                 result["file_path"] = str(filepath)
                 logger.info(f"工作流已保存：{filepath}")
         
+        logger.info(f"[run_generation] 返回结果：{result.get('status')}")
         return result
     
     except Exception as e:

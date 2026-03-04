@@ -429,9 +429,11 @@ pre {
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     font-size: 0.875rem;
     line-height: 1.5;
+    transition: max-height 0.3s ease;
 }
 
-pre.collapsed {
+/* JSON 查看器收起状态 */
+.json-viewer.collapsed pre {
     max-height: 200px;
 }
 
