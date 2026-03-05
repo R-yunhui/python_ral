@@ -21,16 +21,18 @@ if sys.platform == "win32":
 
 import logging
 import time
+import uuid
 from typing import Optional, AsyncGenerator
 import json
 from pathlib import Path
 from asyncio import Queue
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from contextlib import asynccontextmanager
 
@@ -121,6 +123,11 @@ class GenerateRequest(BaseModel):
 
     query: str
     config: Optional[dict] = None
+    session_id: Optional[str] = Field(default=None, alias="sessionId")
+    is_resume: bool = Field(default=False, alias="isResume")
+    original_query: Optional[str] = Field(default=None, alias="originalQuery")
+
+    model_config = {"populate_by_name": True}
 
 
 class GenerateResponse(BaseModel):
@@ -134,6 +141,9 @@ class GenerateResponse(BaseModel):
     file_path: Optional[str] = None
     import_result: Optional[dict] = None
     import_error: Optional[str] = None
+    session_id: Optional[str] = None
+    needs_clarification: bool = False
+    pending_clarification: Optional[dict] = None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -192,50 +202,84 @@ async def _import_workflow_to_bisheng(
 @app.post("/api/generate", response_model=GenerateResponse)
 async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
     """
-    生成工作流
+    生成工作流（支持首轮 / 续轮澄清）
 
     Args:
-        request: 生成请求，包含用户查询
+        request: 生成请求，包含用户查询、session_id、is_resume
         fastapi_request: FastAPI 请求对象，用于读取 Cookie 中的 token
 
     Returns:
-        生成的工作流
+        生成的工作流或澄清请求
     """
     token = _get_access_token(fastapi_request)
-    logger.info("收到生成请求，query=%s，has_token=%s", request.query[:50], bool(token))
+    session_id = request.session_id or uuid.uuid4().hex
+    is_resume = request.is_resume
+
+    logger.info(
+        "收到生成请求，query=%s, session_id=%s, is_resume=%s, has_token=%s",
+        request.query[:50], session_id, is_resume, bool(token),
+    )
+
+    # 续轮校验
+    if is_resume and not request.session_id:
+        raise HTTPException(status_code=400, detail="续轮请求必须携带 sessionId")
+    if is_resume and (not request.query or not request.query.strip()):
+        raise HTTPException(status_code=400, detail="请输入补充信息")
+
+    graph_config = {"configurable": {"thread_id": session_id}}
 
     try:
         orchestrator = WorkflowOrchestrator(request.config)
-        await orchestrator.knowledge_agent.load_knowledge_catalog(
-            base_url=config.bisheng_base_url,
-            access_token=token,
-        )
+        if not is_resume:
+            await orchestrator.knowledge_agent.load_knowledge_catalog(
+                base_url=config.bisheng_base_url,
+                access_token=token,
+            )
 
-        # 生成工作流
-        result = await orchestrator.generate(request.query)
+        if is_resume:
+            result = await orchestrator.generate_resume(
+                resume_value=request.query,
+                session_id=session_id,
+                config=graph_config,
+            )
+        else:
+            result = await orchestrator.generate(
+                user_input=request.query,
+                session_id=session_id,
+                config=graph_config,
+            )
+
+        # 需要澄清 → 直接返回，不保存/导入
+        if result.get("needs_clarification"):
+            return GenerateResponse(
+                status="success",
+                message=result.get("message", "需要用户补充信息"),
+                session_id=session_id,
+                needs_clarification=True,
+                pending_clarification=result.get("pending_clarification"),
+            )
 
         if result.get("status") == "success":
-            # 保存工作流
             workflow = result.get("workflow")
             if workflow:
                 filepath = save_workflow(workflow)
                 result["file_path"] = str(filepath)
-                logger.info(f"工作流已保存：{filepath}")
+                logger.info("工作流已保存：%s", filepath)
 
-            # 可选：自动导入到毕昇（仅由请求 body 中 config.auto_import 控制）
             auto_import = (request.config or {}).get("auto_import", False)
             if auto_import and workflow:
                 try:
                     name = workflow.get("name")
                     if not name and isinstance(result.get("metadata"), dict):
-                        intent = result["metadata"].get("intent")
-                        if isinstance(intent, dict) and intent.get("rewritten_input"):
-                            name = intent["rewritten_input"][:50]
+                        intent_data = result["metadata"].get("intent")
+                        if isinstance(intent_data, dict) and intent_data.get("rewritten_input"):
+                            name = intent_data["rewritten_input"][:50]
+                    name = name or "导入的工作流"
                     import_result = await _import_workflow_to_bisheng(
                         base_url=config.bisheng_base_url,
                         token=token,
                         workflow=workflow,
-                        name=name,
+                        name=f"{name}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
                         publish=True,
                     )
                     result["import_result"] = import_result
@@ -244,17 +288,23 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
                     result["import_error"] = str(e)
                     logger.warning("导入毕昇失败：%s", e)
 
+            result["session_id"] = session_id
             return GenerateResponse(**result)
         else:
             return GenerateResponse(
                 status="error",
                 message=result.get("message", "生成失败"),
                 error=result.get("message"),
+                session_id=session_id,
             )
 
     except Exception as e:
-        logger.error(f"生成工作流失败：{e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"生成失败：{str(e)}")
+        error_msg = str(e)
+        # 续轮 session 失效
+        if is_resume and ("thread" in error_msg.lower() or "checkpoint" in error_msg.lower()):
+            raise HTTPException(status_code=409, detail="会话已过期，请重新发起")
+        logger.error("生成工作流失败：%s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"生成失败：{error_msg}")
 
 
 @app.get("/api/workflows", response_model=list)
@@ -369,12 +419,14 @@ async def import_workflow_to_bisheng(
         )
     if not workflow or not workflow.get("nodes") or not workflow.get("edges"):
         raise HTTPException(status_code=400, detail="工作流格式无效：需包含 nodes 和 edges")
+    base_name = body.name or workflow.get("name") or "导入的工作流"
+    import_name = f"{base_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     try:
         result = await _import_workflow_to_bisheng(
             base_url=config.bisheng_base_url,
             token=token,
             workflow=workflow,
-            name=body.name,
+            name=import_name,
             publish=body.publish,
         )
         return {"status": "success", "message": "已导入到毕昇", "import_result": result}
@@ -384,14 +436,14 @@ async def import_workflow_to_bisheng(
 
 
 @app.post("/api/generate/stream")
-@app.get("/api/generate/stream")  # 同时支持 GET 请求（用于浏览器直接访问）
+@app.get("/api/generate/stream")
 async def generate_workflow_stream(
     fastapi_request: Request,
     request: Optional[GenerateRequest] = None,
     query: Optional[str] = None,
 ):
     """
-    生成工作流（流式 SSE 版本）
+    生成工作流（流式 SSE 版本，支持首轮/续轮澄清）
 
     Args:
         request: 生成请求，包含用户查询（POST 方式）
@@ -400,18 +452,28 @@ async def generate_workflow_stream(
     Returns:
         SSE 事件流，实时推送进度
     """
-    # 兼容 GET 和 POST 请求
     user_query = ""
     request_config = None
+    session_id = None
+    is_resume = False
+    original_user_input = None
 
     if request:
         user_query = request.query
         request_config = request.config
-    elif query:
-        user_query = query
-        request_config = None
+        session_id = request.session_id
+        is_resume = request.is_resume
+        original_user_input = request.original_query
     else:
-        user_query = ""
+        user_query = query or ""
+        # GET 时从 query_params 读取 session_id、is_resume、original_query
+        params = fastapi_request.query_params
+        if params.get("session_id"):
+            session_id = params.get("session_id")
+        if params.get("is_resume", "").lower() in ("true", "1", "yes"):
+            is_resume = True
+        if params.get("original_query"):
+            original_user_input = params.get("original_query")
 
     if not user_query:
         error_event = ProgressEvent(
@@ -424,26 +486,29 @@ async def generate_workflow_stream(
             yield f"event: error\ndata: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
         return StreamingResponse(error_generator(), media_type="text/event-stream")
 
-    logger.info("收到流式生成请求，query=%s", user_query[:50])
+    session_id = session_id or uuid.uuid4().hex
 
-    # 创建事件队列
-    event_queue = Queue()
+    logger.info(
+        "收到流式生成请求，query=%s, session_id=%s, is_resume=%s",
+        user_query[:50], session_id, is_resume,
+    )
 
-    # 定义进度回调函数
+    event_queue: Queue = Queue()
+
     async def progress_callback(event: ProgressEvent):
-        """将进度事件放入队列"""
         await event_queue.put(event)
 
-    # 定义 SSE 生成器
     async def event_generator() -> AsyncGenerator[str, None]:
-        """生成 SSE 事件"""
         try:
             start_event = ProgressEvent.create_start_event(user_query)
             yield f"data: {json.dumps(start_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.1)
 
             token = _get_access_token(fastapi_request)
-            logger.info("流式生成任务启动，query=%s，has_token=%s", user_query[:50], bool(token))
+            logger.info(
+                "流式生成任务启动，query=%s, session_id=%s, is_resume=%s, has_token=%s",
+                user_query[:50], session_id, is_resume, bool(token),
+            )
             generate_task = asyncio.create_task(
                 run_generation(
                     user_query,
@@ -451,6 +516,9 @@ async def generate_workflow_stream(
                     progress_callback,
                     access_token=token,
                     base_url=config.bisheng_base_url,
+                    session_id=session_id,
+                    is_resume=is_resume,
+                    original_user_input=original_user_input,
                 )
             )
 
@@ -467,8 +535,10 @@ async def generate_workflow_stream(
                 if task_done:
                     try:
                         result = generate_task.result()
-                        # 如果成功，发送 COMPLETE 确认事件
-                        if result.get("status") == "success":
+                        if result.get("needs_clarification"):
+                            # 澄清事件已由 generate_with_progress 发送
+                            pass
+                        elif result.get("status") == "success":
                             final_event = ProgressEvent(
                                 event_type=ProgressEventType.COMPLETE,
                                 message="生成完成",
@@ -477,51 +547,45 @@ async def generate_workflow_stream(
                             )
                             yield f"data: {json.dumps(final_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                     except Exception as e:
-                        logger.exception(f"获取任务结果失败：{e}")
+                        logger.exception("获取任务结果失败：%s", e)
                     break
 
-                # 任务未完成，等待新事件
                 try:
                     event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
                     yield f"data: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                 except asyncio.TimeoutError:
-                    # 超时后进入下一次循环，检查 task_done
                     continue
                 except asyncio.CancelledError:
                     logger.warning("SSE 连接被取消")
                     break
                 except Exception as e:
-                    logger.exception(f"SSE 事件发送失败：{e}")
+                    logger.exception("SSE 事件发送失败：%s", e)
                     break
 
         except Exception as e:
-            logger.error(f"SSE 生成器错误：{e}", exc_info=True)
+            logger.error("SSE 生成器错误：%s", e, exc_info=True)
             error_event = ProgressEvent(
                 event_type=ProgressEventType.ERROR,
                 message=f"生成失败：{str(e)}",
                 error=str(e),
                 progress=0.0,
             )
-            # 标准 SSE 格式
             yield f"data: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
 
-    # 返回 SSE 响应
     response = StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Nginx: 禁用缓冲
+            "X-Accel-Buffering": "no",
             "Transfer-Encoding": "chunked",
         },
     )
 
-    # 确保响应不会被缓冲
     from starlette.background import BackgroundTask
 
     async def cleanup():
-        """清理函数"""
         pass
 
     response.background = BackgroundTask(cleanup)
@@ -534,33 +598,55 @@ async def run_generation(
     progress_callback,
     access_token: Optional[str] = None,
     base_url: str = "",
+    session_id: Optional[str] = None,
+    is_resume: bool = False,
+    original_user_input: Optional[str] = None,
 ) -> dict:
     """
-    执行生成任务
+    执行生成任务（支持首轮/续轮）
 
     Args:
-        query: 用户查询
-        request_config: 请求体中的 config（可选）
+        query: 用户查询（续轮时为用户澄清回复）
+        request_config: 请求体中的 config
         progress_callback: 进度回调
-        access_token: 毕昇 access_token（Cookie 或配置），用于按用户加载知识库
-        base_url: 毕昇 API base_url，用于拉取知识库列表
+        access_token: 毕昇 access_token
+        base_url: 毕昇 API base_url
+        session_id: 会话 ID
+        is_resume: 是否为续轮
+        original_user_input: 首轮用户输入（续轮时必传，用于恢复 state）
 
     Returns:
         生成结果
     """
-    logger.info("run_generation 开始，query=%s", query[:50])
+    logger.info(
+        "run_generation 开始，query=%s, session_id=%s, is_resume=%s",
+        query[:50], session_id, is_resume,
+    )
+
+    graph_config = {"configurable": {"thread_id": session_id}} if session_id else {}
+
     try:
         orchestrator = WorkflowOrchestrator(
             config_obj=request_config, progress_callback=progress_callback
         )
-        await orchestrator.knowledge_agent.load_knowledge_catalog(
-            base_url=base_url,
-            access_token=access_token or "",
-        )
+        if not is_resume:
+            await orchestrator.knowledge_agent.load_knowledge_catalog(
+                base_url=base_url,
+                access_token=access_token or "",
+            )
 
         result = await orchestrator.generate_with_progress(
-            user_input=query, progress_callback=progress_callback
+            user_input=query,
+            progress_callback=progress_callback,
+            session_id=session_id,
+            graph_config=graph_config,
+            is_resume=is_resume,
+            original_user_input=original_user_input,
         )
+
+        # 澄清时不保存/导入
+        if result.get("needs_clarification"):
+            return result
 
         if result.get("status") == "success":
             workflow = result.get("workflow")
@@ -569,17 +655,17 @@ async def run_generation(
                 result["file_path"] = str(filepath)
                 logger.info("工作流已保存，path=%s", filepath)
 
-            # 可选：自动导入到毕昇（仅由请求 body 中 config.auto_import 控制）
             auto_import = (request_config or {}).get("auto_import", False)
             if auto_import and workflow and progress_callback:
                 await progress_callback(ProgressEvent.create_agent_start_event(AgentName.IMPORT))
                 start_ts = time.time()
                 try:
+                    base_name = workflow.get("name") or "导入的工作流"
                     import_result = await _import_workflow_to_bisheng(
                         base_url=base_url,
                         token=access_token or "",
                         workflow=workflow,
-                        name=workflow.get("name"),
+                        name=f"{base_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
                         publish=True,
                     )
                     result["import_result"] = import_result
@@ -608,7 +694,7 @@ async def run_generation(
         return result
 
     except Exception as e:
-        logger.error(f"生成工作流失败：{e}", exc_info=True)
+        logger.error("生成工作流失败：%s", e, exc_info=True)
         return {"status": "error", "message": f"生成失败：{str(e)}"}
 
 

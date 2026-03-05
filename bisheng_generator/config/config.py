@@ -76,6 +76,19 @@ class Config(BaseModel):
         description="毕昇接口地址，用于知识库列表、工作流导入等",
     )
 
+    # MCP 工具搜索接口（已封装大模型筛选 + 向量检索）
+    mcp_search_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "MCP_SEARCH_URL", "http://10.10.1.40:8000/api/mcp-search"
+        ),
+        description="MCP 工具搜索接口地址，用于根据用户意图检索匹配的 MCP 工具",
+    )
+    mcp_search_top_k: int = Field(
+        default_factory=lambda: int(os.getenv("MCP_SEARCH_TOP_K", "10")),
+        ge=1,
+        description="MCP 工具搜索返回的最大数量",
+    )
+
     # 服务配置
     service_host: str = Field(default="0.0.0.0", description="服务监听地址")
     service_port: int = Field(default=8000, description="服务端口")

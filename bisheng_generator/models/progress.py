@@ -24,6 +24,9 @@ class ProgressEventType(str, Enum):
     COMPLETE = "complete"
     """全部完成"""
     
+    NEEDS_CLARIFICATION = "needs_clarification"
+    """需要用户澄清"""
+
     ERROR = "error"
     """生成失败"""
 
@@ -222,6 +225,24 @@ class ProgressEvent(BaseModel):
             message="❌ 生成失败",
             error=error,
             progress=0.0
+        )
+
+    @classmethod
+    def create_needs_clarification_event(
+        cls,
+        pending_clarification: dict,
+        session_id: str,
+    ) -> "ProgressEvent":
+        """创建需要澄清事件（图因 interrupt 暂停时发送）"""
+        return cls(
+            event_type=ProgressEventType.NEEDS_CLARIFICATION,
+            message="⏸️ 需要您补充更多信息",
+            data={
+                "needs_clarification": True,
+                "pending_clarification": pending_clarification,
+                "session_id": session_id,
+            },
+            progress=10.0,
         )
     
     @staticmethod

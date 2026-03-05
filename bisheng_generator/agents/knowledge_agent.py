@@ -147,7 +147,7 @@ class KnowledgeAgent:
         page_num = 1
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
                 while True:
                     url = (
                         f"{base_url}/api/v1/knowledge"

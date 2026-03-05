@@ -5,9 +5,7 @@
 结合上下文信息（工具、知识库、用户需求）生成毕昇工作流。
 """
 
-import json
 import logging
-import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -94,6 +92,9 @@ class WorkflowAgent:
                     {catalog}
 
                     {instructions}
+
+                    【保守原则】
+                    若用户需求描述为简单、单一场景，生成的工作流应精简，不要添加用户未明确要求的能力或节点。
 
                     【当前上下文信息】
                     用户需求：{intent.rewritten_input}

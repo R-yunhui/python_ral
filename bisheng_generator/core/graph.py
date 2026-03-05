@@ -1,12 +1,25 @@
 """LangGraph 编排模块 - 包含 BaseChatModel 初始化和工作流编排"""
 
-from typing import Optional, Dict, Any, TypedDict, Callable, Awaitable, List, NotRequired
+from typing import (
+    Optional,
+    Dict,
+    Any,
+    TypedDict,
+    Callable,
+    Awaitable,
+    List,
+    NotRequired,
+)
+import json
+import logging
+import time
+
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langgraph.graph import StateGraph, START, END
-import logging
-import time
+from langgraph.types import interrupt, Command
+from langgraph.checkpoint.memory import InMemorySaver
 
 from config.config import Config, config
 from core.utils import is_retryable
@@ -64,6 +77,9 @@ class ModelInitializer:
                     "include_usage": True,
                 }
             },
+            extra_body={
+                "enable_thinking": False,
+            }
         )
 
         logger.info("LLM 初始化成功")
@@ -115,7 +131,8 @@ class WorkflowState(TypedDict):
     knowledge_match: Optional[KnowledgeMatch]
     workflow: Optional[Dict[str, Any]]
     error: Optional[str]
-    warnings: NotRequired[Optional[List[str]]]  # 降级时追加说明，便于前端展示
+    warnings: NotRequired[Optional[List[str]]]
+    session_id: NotRequired[Optional[str]]
 
 
 class WorkflowOrchestrator:
@@ -145,7 +162,10 @@ class WorkflowOrchestrator:
 
         # ========== 初始化 Agent ==========
         self.user_agent = UserAgent(self.llm, self.embedding)
-        self.tool_agent = ToolAgent(self.llm, self.embedding)
+        self.tool_agent = ToolAgent(
+            mcp_search_url=self.config.mcp_search_url,
+            mcp_search_top_k=self.config.mcp_search_top_k,
+        )
         self.knowledge_agent = KnowledgeAgent(self.llm, self.embedding)
         self.workflow_agent = WorkflowAgent(self.llm)
 
@@ -208,10 +228,10 @@ class WorkflowOrchestrator:
         # 工作流生成后结束
         builder.add_edge("workflow_generation", END)
 
-        # 编译图
-        graph = builder.compile()
+        # 编译图（带 checkpointer 以支持 interrupt / resume）
+        graph = builder.compile(checkpointer=InMemorySaver())
 
-        logger.info("LangGraph 构建完成（支持条件路由）")
+        logger.info("LangGraph 构建完成（支持条件路由 + interrupt/resume）")
         return graph
 
     def _route_after_intent(self, state: WorkflowState) -> List[str]:
@@ -236,8 +256,12 @@ class WorkflowOrchestrator:
         return targets
 
     async def _run_intent_understanding(self, state: WorkflowState) -> WorkflowState:
-        """运行意图理解 Agent（含重试与降级）"""
-        user_input = state["user_input"]
+        """运行意图理解 Agent（含重试、降级、interrupt 澄清）
+
+        恢复时 LangGraph 会从节点开头重新执行整个节点，但 interrupt()
+        在第二次执行时直接返回 resume 值而不再暂停。
+        """
+        user_input = state.get("user_input") or ""
         logger.info(
             "意图理解开始",
             extra={"user_input_preview": user_input[:100] if user_input else ""},
@@ -248,33 +272,76 @@ class WorkflowOrchestrator:
             ProgressEvent.create_agent_start_event(AgentName.INTENT_UNDERSTANDING)
         )
 
+        # --- 第一段：首轮 LLM 分析（恢复后也会重跑一次） ---
+        intent = await self._understand_with_retry(user_input, state, start_time)
+        if intent is None:
+            # _understand_with_retry 已在内部设了 error / 降级
+            return state
+
+        # --- 第二段：若需澄清 → interrupt ---
+        if intent.needs_clarification and intent.clarification_questions:
+            pending = {
+                "questions": intent.clarification_questions,
+                "message": "请补充以下信息，以便更准确生成工作流",
+                "rewritten_input_preview": intent.rewritten_input,
+                "original_user_input": user_input,
+            }
+            logger.info(
+                "意图需要澄清，触发 interrupt，questions=%s",
+                intent.clarification_questions,
+            )
+            # 首轮在此暂停；恢复后 interrupt() 直接返回 resume 值
+            user_reply = interrupt(pending)
+            logger.info("interrupt 恢复，user_reply=%s", (str(user_reply) or "")[:100])
+
+            # --- 第三段：恢复后合并意图 ---
+            chat_history = [
+                {"role": "user", "content": user_input},
+                {
+                    "role": "assistant",
+                    "content": json.dumps(pending, ensure_ascii=False),
+                },
+            ]
+            merged = await self._understand_with_retry(
+                str(user_reply), state, start_time, chat_history=chat_history
+            )
+            if merged is None:
+                return state
+            merged.needs_clarification = False
+            merged.clarification_questions = []
+            intent = merged
+
+        # --- 发送完成事件 ---
+        duration_ms = (time.time() - start_time) * 1000
+        event_data = {
+            "workflow_type": intent.get_workflow_type(),
+            "needs_tool": intent.needs_tool,
+            "needs_knowledge": intent.needs_knowledge,
+            "rewritten_input": intent.rewritten_input,
+        }
+        await self._emit_progress(
+            ProgressEvent.create_agent_complete_event(
+                AgentName.INTENT_UNDERSTANDING, event_data, duration_ms
+            )
+        )
+        return {"intent": intent}
+
+    async def _understand_with_retry(
+        self,
+        user_input: str,
+        state: WorkflowState,
+        start_time: float,
+        chat_history=None,
+    ) -> Optional[EnhancedIntent]:
+        """带重试与降级的 understand 调用，返回 None 表示已写入 state error/降级。"""
         last_error: Optional[Exception] = None
         for attempt in range(config.max_retries_intent + 1):
             try:
-                intent = await self.user_agent.understand(user_input)
+                intent = await self.user_agent.understand(
+                    user_input, chat_history=chat_history
+                )
                 if intent.rewritten_input:
-                    duration_ms = (time.time() - start_time) * 1000
-                    logger.info(
-                        "意图理解完成",
-                        extra={
-                            "rewritten_input_preview": intent.rewritten_input[:80],
-                            "needs_tool": intent.needs_tool,
-                            "needs_knowledge": intent.needs_knowledge,
-                        },
-                    )
-                    event_data = {
-                        "workflow_type": intent.get_workflow_type(),
-                        "needs_tool": intent.needs_tool,
-                        "needs_knowledge": intent.needs_knowledge,
-                        "rewritten_input": intent.rewritten_input,
-                    }
-                    await self._emit_progress(
-                        ProgressEvent.create_agent_complete_event(
-                            AgentName.INTENT_UNDERSTANDING, event_data, duration_ms
-                        )
-                    )
-                    return {"intent": intent}
-                # 空结果视作可重试，最后一次则降级
+                    return intent
                 last_error = ValueError("意图理解返回空结果")
             except Exception as e:
                 last_error = e
@@ -286,7 +353,8 @@ class WorkflowOrchestrator:
                             AgentName.INTENT_UNDERSTANDING, str(e), duration_ms
                         )
                     )
-                    return {"error": f"意图理解失败：{str(e)}"}
+                    state["error"] = f"意图理解失败：{str(e)}"
+                    return None
                 if attempt == config.max_retries_intent:
                     break
                 logger.warning(
@@ -294,7 +362,7 @@ class WorkflowOrchestrator:
                     extra={"attempt": attempt + 1, "reason": str(e)},
                 )
 
-        # 降级：使用原始输入作为重写结果，不写 state["error"]
+        # 降级
         duration_ms = (time.time() - start_time) * 1000
         fallback_intent = EnhancedIntent(
             original_input=user_input,
@@ -303,10 +371,7 @@ class WorkflowOrchestrator:
             needs_knowledge=False,
             multi_turn=True,
         )
-        logger.warning(
-            "意图理解降级：使用原始输入作为重写结果",
-            extra={"original_input": (user_input or "")[:100]},
-        )
+        logger.warning("意图理解降级：使用原始输入作为重写结果")
         await self._emit_progress(
             ProgressEvent.create_agent_complete_event(
                 AgentName.INTENT_UNDERSTANDING,
@@ -320,9 +385,7 @@ class WorkflowOrchestrator:
                 duration_ms,
             )
         )
-        warnings = list(state.get("warnings") or [])
-        warnings.append("意图理解失败，已使用原始输入")
-        return {"intent": fallback_intent, "warnings": warnings}
+        return fallback_intent
 
     async def _run_tool_selection(self, state: WorkflowState) -> WorkflowState:
         """运行工具选择 Agent（含重试与降级）"""
@@ -407,7 +470,11 @@ class WorkflowOrchestrator:
         await self._emit_progress(
             ProgressEvent.create_agent_complete_event(
                 AgentName.TOOL_SELECTION,
-                {"tools_count": 0, "message": "工具选择失败，已降级为空列表", "degraded": True},
+                {
+                    "tools_count": 0,
+                    "message": "工具选择失败，已降级为空列表",
+                    "degraded": True,
+                },
                 duration_ms,
             )
         )
@@ -432,7 +499,9 @@ class WorkflowOrchestrator:
         if not intent or not intent.needs_knowledge:
             knowledge_match = KnowledgeMatch(required=False)
             duration_ms = (time.time() - start_time) * 1000
-            logger.info("知识库匹配跳过(不需要知识库)", extra={"needs_knowledge": False})
+            logger.info(
+                "知识库匹配跳过(不需要知识库)", extra={"needs_knowledge": False}
+            )
             await self._emit_progress(
                 ProgressEvent.create_agent_complete_event(
                     AgentName.KNOWLEDGE_MATCHING,
@@ -454,7 +523,9 @@ class WorkflowOrchestrator:
                     "知识库匹配完成",
                     extra={
                         "matched_count": len(knowledge_match.matched_knowledge_bases),
-                        "kb_ids": [kb.id for kb in knowledge_match.matched_knowledge_bases],
+                        "kb_ids": [
+                            kb.id for kb in knowledge_match.matched_knowledge_bases
+                        ],
                     },
                 )
                 event_data = {
@@ -547,9 +618,7 @@ class WorkflowOrchestrator:
             return {"error": error_msg}
 
         tool_plan = state.get("tool_plan") or ToolPlan()
-        knowledge_match = state.get("knowledge_match") or KnowledgeMatch(
-            required=False
-        )
+        knowledge_match = state.get("knowledge_match") or KnowledgeMatch(required=False)
 
         last_error: Optional[str] = None
         workflow_result: Optional[Dict[str, Any]] = None
@@ -623,19 +692,25 @@ class WorkflowOrchestrator:
         )
         return {"error": f"工作流生成失败：{error_msg}"}
 
-    async def generate(self, user_input: str) -> Dict[str, Any]:
+    async def generate(
+        self,
+        user_input: str,
+        session_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
-        生成工作流（完整版本 - 使用 LangGraph 编排）
+        生成工作流（首轮）
 
         Args:
             user_input: 用户输入
+            session_id: 会话 ID（用于 checkpointer thread_id）
+            config: LangGraph config（含 configurable.thread_id）
 
         Returns:
-            生成的工作流
+            生成结果（可能含 needs_clarification）
         """
-        logger.info(f"收到用户输入：{user_input}")
+        logger.info("收到用户输入：%s, session_id=%s", user_input[:80], session_id)
 
-        # 初始状态
         initial_state = WorkflowState(
             user_input=user_input,
             intent=None,
@@ -643,68 +718,164 @@ class WorkflowOrchestrator:
             knowledge_match=None,
             workflow=None,
             error=None,
+            session_id=session_id,
         )
 
-        # 运行图
+        graph_config = config or {}
+        if session_id and "configurable" not in graph_config:
+            graph_config["configurable"] = {"thread_id": session_id}
+
         try:
-            result = await self.graph.ainvoke(initial_state)
-
-            # 检查是否有错误
-            if result.get("error"):
-                return {"status": "error", "message": result["error"]}
-
-            # 返回成功结果
-            tool_plan = result.get("tool_plan") or ToolPlan()
-            knowledge_match = result.get("knowledge_match") or KnowledgeMatch(
-                required=False
-            )
-            metadata: Dict[str, Any] = {
-                "intent": (
-                    result.get("intent").model_dump(mode="json")
-                    if result.get("intent")
-                    else None
-                ),
-                "tools_count": len(tool_plan.selected_tools),
-                "knowledge_count": (
-                    len(knowledge_match.matched_knowledge_bases)
-                    if knowledge_match
-                    else 0
-                ),
-            }
-            if result.get("warnings"):
-                metadata["warnings"] = result["warnings"]
-
-            return {
-                "status": "success",
-                "message": "工作流生成成功",
-                "workflow": result.get("workflow"),
-                "metadata": metadata,
-            }
+            result = await self.graph.ainvoke(initial_state, config=graph_config)
+            return self._process_result(result, session_id)
         except Exception as e:
-            logger.exception(f"工作流生成失败：{e}")
+            logger.exception("工作流生成失败：%s", e)
             return {"status": "error", "message": f"工作流生成失败：{str(e)}"}
 
+    async def generate_resume(
+        self,
+        resume_value: str,
+        session_id: str,
+        config: Optional[Dict[str, Any]] = None,
+        original_user_input: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        续轮：恢复被 interrupt 暂停的图
+
+        Args:
+            resume_value: 用户澄清回复
+            session_id: 会话 ID（与首轮同一个）
+            config: LangGraph config
+            original_user_input: 首轮用户输入（续轮时须传入以恢复 state，否则可能 KeyError）
+
+        Returns:
+            生成结果
+        """
+        logger.info(
+            "续轮恢复，resume_value=%s, session_id=%s", resume_value[:80], session_id
+        )
+
+        graph_config = config or {}
+        if "configurable" not in graph_config:
+            graph_config["configurable"] = {"thread_id": session_id}
+
+        # 续轮时必须把首轮 user_input 写回 state，否则节点重跑会读不到
+        update = {"user_input": (original_user_input or "").strip() or resume_value}
+
+        try:
+            result = await self.graph.ainvoke(
+                Command(resume=resume_value, update=update), config=graph_config
+            )
+            return self._process_result(result, session_id)
+        except Exception as e:
+            logger.exception("续轮恢复失败：%s", e)
+            return {"status": "error", "message": f"续轮恢复失败：{str(e)}"}
+
+    def _process_result(
+        self, result: Dict[str, Any], session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """统一处理 ainvoke 返回值（含 __interrupt__ 检测）"""
+        # 检测 interrupt（需要澄清）
+        interrupts = result.get("__interrupt__")
+        if interrupts:
+            pending = (
+                interrupts[0].value
+                if hasattr(interrupts[0], "value")
+                else interrupts[0]
+            )
+            logger.info("检测到 __interrupt__，需要澄清, pending=%s", pending)
+            return {
+                "status": "success",
+                "needs_clarification": True,
+                "pending_clarification": pending,
+                "session_id": session_id,
+                "message": "需要用户补充信息",
+            }
+
+        if result.get("error"):
+            return {"status": "error", "message": result["error"]}
+
+        tool_plan = result.get("tool_plan") or ToolPlan()
+        knowledge_match = result.get("knowledge_match") or KnowledgeMatch(
+            required=False
+        )
+        metadata: Dict[str, Any] = {
+            "intent": (
+                result.get("intent").model_dump(mode="json")
+                if result.get("intent")
+                else None
+            ),
+            "tools_count": len(tool_plan.selected_tools),
+            "knowledge_count": (
+                len(knowledge_match.matched_knowledge_bases) if knowledge_match else 0
+            ),
+        }
+        if result.get("warnings"):
+            metadata["warnings"] = result["warnings"]
+
+        return {
+            "status": "success",
+            "message": "工作流生成成功",
+            "workflow": result.get("workflow"),
+            "metadata": metadata,
+            "session_id": session_id,
+        }
+
     async def generate_with_progress(
-        self, user_input: str, progress_callback: ProgressCallback
+        self,
+        user_input: str,
+        progress_callback: ProgressCallback,
+        session_id: Optional[str] = None,
+        graph_config: Optional[Dict[str, Any]] = None,
+        is_resume: bool = False,
+        original_user_input: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         生成工作流并实时推送进度（流式版本）
 
         Args:
-            user_input: 用户输入
+            user_input: 用户输入（续轮时为用户澄清回复）
             progress_callback: 进度回调函数
+            session_id: 会话 ID
+            graph_config: LangGraph config
+            is_resume: 是否为续轮
+            original_user_input: 首轮用户输入（续轮时必传，用于恢复 state）
 
         Returns:
             生成的工作流
         """
-        logger.info("流式生成开始，user_input=%s", (user_input or "")[:80])
+        logger.info(
+            "流式生成开始，user_input=%s, session_id=%s, is_resume=%s",
+            (user_input or "")[:80],
+            session_id,
+            is_resume,
+        )
         self.progress_callback = progress_callback
         await self._emit_progress(ProgressEvent.create_start_event(user_input))
 
-        result = await self.generate(user_input)
+        if is_resume and session_id:
+            result = await self.generate_resume(
+                user_input,
+                session_id,
+                config=graph_config,
+                original_user_input=original_user_input,
+            )
+        else:
+            result = await self.generate(
+                user_input, session_id=session_id, config=graph_config
+            )
+
         status = result.get("status")
 
-        if status == "success":
+        if result.get("needs_clarification"):
+            await self._emit_progress(
+                ProgressEvent.create_needs_clarification_event(
+                    result.get("pending_clarification", {}),
+                    result.get("session_id", session_id or ""),
+                )
+            )
+            logger.info("流式生成暂停（需要澄清），session_id=%s", session_id)
+        elif status == "success":
             await self._emit_progress(
                 ProgressEvent.create_complete_event(
                     result.get("workflow", {}), result.get("metadata", {})
@@ -715,7 +886,9 @@ class WorkflowOrchestrator:
             await self._emit_progress(
                 ProgressEvent.create_error_event(result.get("message", "未知错误"))
             )
-            logger.warning("流式生成失败，status=error, message=%s", result.get("message", ""))
+            logger.warning(
+                "流式生成失败，status=error, message=%s", result.get("message", "")
+            )
         return result
 
     async def _emit_progress(self, event: ProgressEvent) -> None:

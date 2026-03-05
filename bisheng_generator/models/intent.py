@@ -1,6 +1,6 @@
 """意图模型定义 - 简化版（支持混合类型）"""
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 
 class EnhancedIntent(BaseModel):
@@ -39,6 +39,23 @@ class EnhancedIntent(BaseModel):
         description="是否需要检索知识库"
     )
     
+    # ========== 澄清相关 ==========
+
+    needs_clarification: bool = Field(
+        default=False,
+        description="当前轮是否需先向用户澄清再生成"
+    )
+
+    clarification_questions: List[str] = Field(
+        default_factory=list,
+        description="向用户展示的澄清问题（1~3 条）"
+    )
+
+    complexity_hint: Literal["simple", "moderate", "full"] = Field(
+        default="moderate",
+        description="复杂度提示，供下游参考（首版仅预留，不影响路由）"
+    )
+
     # ========== 其他配置 ==========
     
     multi_turn: bool = Field(
@@ -93,20 +110,29 @@ class EnhancedIntent(BaseModel):
     
     class Config:
         json_schema_extra = {
-            "description": "增强的意图描述（简化版，支持混合类型）",
+            "description": "增强的意图描述（简化版，支持混合类型，含澄清字段）",
             "examples": [
                 {
                     "original_input": "帮我做个查天气的助手",
                     "rewritten_input": "创建一个天气查询助手，用户输入城市名称，调用天气 API 返回实时天气信息",
                     "needs_tool": True,
                     "needs_knowledge": False,
+                    "needs_clarification": False,
+                    "clarification_questions": [],
+                    "complexity_hint": "simple",
                     "multi_turn": True
                 },
                 {
-                    "original_input": "做一个基于公司文档的智能客服",
-                    "rewritten_input": "创建一个智能客服系统，从公司知识库检索答案，必要时调用工单系统 API",
-                    "needs_tool": True,
-                    "needs_knowledge": True,
+                    "original_input": "做个助手",
+                    "rewritten_input": "做个助手",
+                    "needs_tool": False,
+                    "needs_knowledge": False,
+                    "needs_clarification": True,
+                    "clarification_questions": [
+                        "您希望助手主要实现什么功能？（如：查天气、查政策、客服问答等）",
+                        "是否需要对接外部工具或知识库？"
+                    ],
+                    "complexity_hint": "moderate",
                     "multi_turn": True
                 }
             ]
