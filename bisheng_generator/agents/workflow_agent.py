@@ -6,6 +6,7 @@
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -86,31 +87,40 @@ class WorkflowAgent:
         catalog = await self._get_skills_catalog()
         instructions = get_tools_usage_instructions()
 
-        system_prompt = f"""
-                    你是一个专业的毕昇工作流生成专家，可以使用以下技能和数据完成毕升工作流的创建：
+        system_prompt = f"""你是一个专业的毕昇工作流生成专家，可以使用以下技能和数据完成毕升工作流的创建：
 
-                    {catalog}
+{catalog}
 
-                    {instructions}
+{instructions}
 
-                    【保守原则】
-                    若用户需求描述为简单、单一场景，生成的工作流应精简，不要添加用户未明确要求的能力或节点。
+【用户需求分析】
+需求描述：{intent.rewritten_input}
+工作流类型：{intent.get_workflow_type()}
+复杂度：{intent.complexity_hint}
+是否需要工具：{intent.needs_tool}
+是否需要知识库：{intent.needs_knowledge}
+是否多轮对话：{intent.multi_turn}
 
-                    【当前上下文信息】
-                    用户需求：{intent.rewritten_input}
+【候选资源（按需选用，不必全部使用）】
 
-                    可用工具：
-                    {tools_info}
+候选工具（来自语义检索的候选集，请根据用户需求选择性使用，与需求不直接相关的请忽略）：
+{tools_info}
 
-                    可用知识库：
-                    {knowledge_info}
+候选知识库（请仅在需求涉及对应领域的文档检索时使用，不相关的请忽略）：
+{knowledge_info}
 
-                    【输出要求】
-                    - 你必须始终以 JSON 格式返回最终结果
-                    - JSON 必须使用 ```json 代码块包裹
-                    - 确保 JSON 格式正确，可以被 json.loads() 解析
-                    - 如果任务有结构化数据，请放在 JSON 对象中
-                """
+【工作流设计原则】
+1. 保守优先：用户没有明确要求的能力，不要添加。若需求为简单、单一场景，工作流应精简
+2. 工具按需选用：只有当用户需求明确需要某个工具的功能时，才创建对应的 Tool 节点。候选列表中与需求不直接相关的工具请直接忽略
+3. 知识库按需选用：只有当需求涉及特定领域的文档检索时，才创建 Knowledge Retriever 节点
+4. 禁止死分支：每个 Tool 节点的输出必须被下游 LLM 节点通过 {{{{#tool_xxx.output#}}}} 引用，不允许创建无出边或输出未被消费的孤立节点
+5. 复杂度控制：simple 约 3-5 个节点，moderate 约 5-8 个节点，full 可包含条件分支等复杂逻辑
+
+【输出要求】
+- 你必须始终以 JSON 格式返回最终结果
+- JSON 必须使用 ```json 代码块包裹
+- 确保 JSON 格式正确，可以被 json.loads() 解析
+"""
 
         agent = create_agent(
             model=self.llm,
@@ -154,18 +164,20 @@ class WorkflowAgent:
             return {"error": "工作流生成失败", "content": content}
 
         # 规范化工作流，补全毕昇前端必需的 value 等字段，避免导入时报 "Cannot read properties of undefined (reading 'value')"
-        workflow_json = self._normalize_workflow(workflow_json)
+        workflow_json = self._normalize_workflow(workflow_json, tool_plan)
 
         logger.info("工作流生成成功，nodes=%s", len(workflow_json.get("nodes", [])))
         return workflow_json
 
-    def _normalize_workflow(self, w: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_workflow(
+        self, w: Dict[str, Any], tool_plan: Optional[ToolPlan] = None
+    ) -> Dict[str, Any]:
         """
         规范化工作流 JSON，补全毕昇前端必需的字段，避免导入时报错
         （如 Cannot read properties of undefined (reading 'value')）
 
         包含：顶层字段、节点结构、param.value 补全、knowledge_retriever/llm 特殊参数、
-        edges、viewport 等。
+        edges、viewport、tool_key 修复等。
         """
         from datetime import datetime
 
@@ -188,6 +200,10 @@ class WorkflowAgent:
         vp.setdefault("x", 0)
         vp.setdefault("y", 0)
         vp.setdefault("zoom", 1)
+
+        # 5. 修复被 LLM 截断的 MCP 工具 tool_key
+        if tool_plan:
+            self._fix_tool_keys(w, tool_plan)
 
         return w
 
@@ -360,21 +376,75 @@ class WorkflowAgent:
                 th = e.get("targetHandle", "left_handle")
                 e["id"] = f"xy-edge__{e['source']}{sh}-{e['target']}{th}"
 
+    def _fix_tool_keys(self, w: Dict[str, Any], tool_plan: ToolPlan) -> None:
+        """修复被 LLM 截断的 MCP 工具 tool_key（兜底逻辑）
+
+        MCP 工具的 tool_key 格式为 {name}_{id}（如 get-current-date_28785811），
+        LLM 生成时可能丢掉 _id 后缀。此方法通过 base name 匹配自动修复。
+        """
+        if not tool_plan.selected_tools:
+            return
+
+        valid_keys = {t.tool_key for t in tool_plan.selected_tools}
+
+        # base_name -> full_key 映射，用于修复截断的 key
+        base_to_full: Dict[str, str] = {}
+        for t in tool_plan.selected_tools:
+            base_to_full[t.tool_key] = t.tool_key
+            base = re.sub(r"_\d{4,}$", "", t.tool_key)
+            if base != t.tool_key:
+                base_to_full[base] = t.tool_key
+
+        for node in w.get("nodes", []):
+            data = node.get("data", {})
+            if data.get("type") != "tool":
+                continue
+            current_key = data.get("tool_key", "")
+            if not current_key or current_key in valid_keys:
+                continue
+            if current_key in base_to_full:
+                fixed_key = base_to_full[current_key]
+                logger.warning(
+                    "修复 tool_key：%s -> %s (node=%s)",
+                    current_key,
+                    fixed_key,
+                    node.get("id"),
+                )
+                data["tool_key"] = fixed_key
+
     def _format_tools_info(self, tool_plan: ToolPlan) -> str:
-        """格式化工具信息"""
+        """格式化工具信息，区分内置工具与 MCP 工具并强调 tool_key 不可修改"""
         if not tool_plan.selected_tools:
             return "无工具调用需求"
 
-        lines = []
+        lines = [
+            "⚠️ 重要：以下每个工具的 tool_key 必须原样写入生成的 JSON，"
+            "禁止省略、修改或截断任何部分（MCP 工具的 _数字ID 后缀不可删除）：",
+        ]
         for tool in tool_plan.selected_tools:
-            lines.append(f"- tool_key: {tool.tool_key}")
+            tool_type = "MCP工具" if self._is_mcp_tool(tool) else "内置工具"
+            lines.append(f'- [{tool_type}] tool_key: "{tool.tool_key}"（必须完全一致）')
             lines.append(f"  名称：{tool.name}")
             lines.append(f"  描述：{tool.desc}")
             if tool.parameters:
-                params = [p.get("name") for p in tool.parameters]
-                lines.append(f"  参数：{params}")
+                params_info = []
+                for p in tool.parameters:
+                    name = p.get("name", "")
+                    desc = p.get("description", "")
+                    required = "必填" if p.get("required") else "选填"
+                    params_info.append(f"{name}({required}): {desc}" if desc else f"{name}({required})")
+                lines.append(f"  参数：{params_info}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _is_mcp_tool(tool) -> bool:
+        """判断是否为 MCP 工具（非内置）"""
+        if tool.extra:
+            ct = tool.extra.get("connection_type", "")
+            if ct and ct != "builtin":
+                return True
+        return bool(re.search(r"_\d{4,}$", tool.tool_key))
 
     def _format_knowledge_info(self, knowledge_match: KnowledgeMatch) -> str:
         """格式化知识库信息"""

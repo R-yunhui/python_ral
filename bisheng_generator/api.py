@@ -89,6 +89,7 @@ root_logger.addHandler(utf8_handler)
 
 logger = logging.getLogger(__name__)
 
+
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     """FastAPI 生命周期。知识库改为按请求从 Cookie token 加载，不再启动时预加载。"""
@@ -169,6 +170,44 @@ def _get_access_token(request: Request) -> str:
     return request.cookies.get("access_token_cookie") or ""
 
 
+def _import_name_with_timestamp(
+    workflow: dict,
+    explicit_name: str | None = None,
+    metadata: dict | None = None,
+) -> str:
+    """生成导入用名称（带时间戳）。优先：显式名称 > workflow.name > metadata.intent.rewritten_input > 默认。"""
+    base = explicit_name or workflow.get("name")
+    if not base and metadata and isinstance(metadata, dict):
+        intent = metadata.get("intent")
+        if isinstance(intent, dict) and intent.get("rewritten_input"):
+            base = (intent["rewritten_input"] or "")[:50]
+    base = base or "导入的工作流"
+    return f"{base}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
+async def _do_import_workflow(
+    workflow: dict,
+    base_url: str,
+    token: str,
+    *,
+    explicit_name: str | None = None,
+    metadata: dict | None = None,
+    publish: bool = True,
+) -> dict:
+    """统一执行导入：计算名称（带时间戳）并调用毕昇导入。返回导入结果，失败抛异常。"""
+    name = _import_name_with_timestamp(
+        workflow, explicit_name=explicit_name, metadata=metadata
+    )
+    logger.info("导入工作流名称：%s", name)
+    return await _import_workflow_to_bisheng(
+        base_url=base_url,
+        token=token,
+        workflow=workflow,
+        name=name,
+        publish=publish,
+    )
+
+
 async def _import_workflow_to_bisheng(
     base_url: str,
     token: str,
@@ -217,7 +256,10 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
 
     logger.info(
         "收到生成请求，query=%s, session_id=%s, is_resume=%s, has_token=%s",
-        request.query[:50], session_id, is_resume, bool(token),
+        request.query[:50],
+        session_id,
+        is_resume,
+        bool(token),
     )
 
     # 续轮校验
@@ -269,21 +311,17 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
             auto_import = (request.config or {}).get("auto_import", False)
             if auto_import and workflow:
                 try:
-                    name = workflow.get("name")
-                    if not name and isinstance(result.get("metadata"), dict):
-                        intent_data = result["metadata"].get("intent")
-                        if isinstance(intent_data, dict) and intent_data.get("rewritten_input"):
-                            name = intent_data["rewritten_input"][:50]
-                    name = name or "导入的工作流"
-                    import_result = await _import_workflow_to_bisheng(
-                        base_url=config.bisheng_base_url,
-                        token=token,
-                        workflow=workflow,
-                        name=f"{name}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                    import_result = await _do_import_workflow(
+                        workflow,
+                        config.bisheng_base_url,
+                        token,
+                        metadata=result.get("metadata"),
                         publish=True,
                     )
                     result["import_result"] = import_result
-                    logger.info("工作流已导入毕昇：flow_id=%s", import_result.get("flow_id"))
+                    logger.info(
+                        "工作流已导入毕昇：flow_id=%s", import_result.get("flow_id")
+                    )
                 except Exception as e:
                     result["import_error"] = str(e)
                     logger.warning("导入毕昇失败：%s", e)
@@ -301,7 +339,9 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
     except Exception as e:
         error_msg = str(e)
         # 续轮 session 失效
-        if is_resume and ("thread" in error_msg.lower() or "checkpoint" in error_msg.lower()):
+        if is_resume and (
+            "thread" in error_msg.lower() or "checkpoint" in error_msg.lower()
+        ):
             raise HTTPException(status_code=409, detail="会话已过期，请重新发起")
         logger.error("生成工作流失败：%s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"生成失败：{error_msg}")
@@ -418,15 +458,15 @@ async def import_workflow_to_bisheng(
             detail="请提供 workflow（JSON）或 filename（已保存的文件名）",
         )
     if not workflow or not workflow.get("nodes") or not workflow.get("edges"):
-        raise HTTPException(status_code=400, detail="工作流格式无效：需包含 nodes 和 edges")
-    base_name = body.name or workflow.get("name") or "导入的工作流"
-    import_name = f"{base_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        raise HTTPException(
+            status_code=400, detail="工作流格式无效：需包含 nodes 和 edges"
+        )
     try:
-        result = await _import_workflow_to_bisheng(
-            base_url=config.bisheng_base_url,
-            token=token,
-            workflow=workflow,
-            name=import_name,
+        result = await _do_import_workflow(
+            workflow,
+            config.bisheng_base_url,
+            token,
+            explicit_name=body.name,
             publish=body.publish,
         )
         return {"status": "success", "message": "已导入到毕昇", "import_result": result}
@@ -482,15 +522,19 @@ async def generate_workflow_stream(
             error="请提供 query 参数",
             progress=0.0,
         )
+
         async def error_generator():
             yield f"event: error\ndata: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+
         return StreamingResponse(error_generator(), media_type="text/event-stream")
 
     session_id = session_id or uuid.uuid4().hex
 
     logger.info(
         "收到流式生成请求，query=%s, session_id=%s, is_resume=%s",
-        user_query[:50], session_id, is_resume,
+        user_query[:50],
+        session_id,
+        is_resume,
     )
 
     event_queue: Queue = Queue()
@@ -507,7 +551,10 @@ async def generate_workflow_stream(
             token = _get_access_token(fastapi_request)
             logger.info(
                 "流式生成任务启动，query=%s, session_id=%s, is_resume=%s, has_token=%s",
-                user_query[:50], session_id, is_resume, bool(token),
+                user_query[:50],
+                session_id,
+                is_resume,
+                bool(token),
             )
             generate_task = asyncio.create_task(
                 run_generation(
@@ -620,7 +667,9 @@ async def run_generation(
     """
     logger.info(
         "run_generation 开始，query=%s, session_id=%s, is_resume=%s",
-        query[:50], session_id, is_resume,
+        query[:50],
+        session_id,
+        is_resume,
     )
 
     graph_config = {"configurable": {"thread_id": session_id}} if session_id else {}
@@ -657,15 +706,16 @@ async def run_generation(
 
             auto_import = (request_config or {}).get("auto_import", False)
             if auto_import and workflow and progress_callback:
-                await progress_callback(ProgressEvent.create_agent_start_event(AgentName.IMPORT))
+                await progress_callback(
+                    ProgressEvent.create_agent_start_event(AgentName.IMPORT)
+                )
                 start_ts = time.time()
                 try:
-                    base_name = workflow.get("name") or "导入的工作流"
-                    import_result = await _import_workflow_to_bisheng(
-                        base_url=base_url,
-                        token=access_token or "",
-                        workflow=workflow,
-                        name=f"{base_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                    import_result = await _do_import_workflow(
+                        workflow,
+                        base_url,
+                        access_token or "",
+                        metadata=result.get("metadata"),
                         publish=True,
                     )
                     result["import_result"] = import_result
@@ -681,7 +731,9 @@ async def run_generation(
                             duration_ms,
                         )
                     )
-                    logger.info("工作流已导入毕昇：flow_id=%s", import_result.get("flow_id"))
+                    logger.info(
+                        "工作流已导入毕昇：flow_id=%s", import_result.get("flow_id")
+                    )
                 except Exception as e:
                     result["import_error"] = str(e)
                     duration_ms = (time.time() - start_ts) * 1000
