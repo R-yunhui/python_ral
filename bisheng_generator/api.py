@@ -20,6 +20,7 @@ if sys.platform == "win32":
     os.environ["PYTHONUTF8"] = "1"
 
 import logging
+import time
 from typing import Optional, AsyncGenerator
 import json
 from pathlib import Path
@@ -33,10 +34,13 @@ from pydantic import BaseModel
 
 from contextlib import asynccontextmanager
 
+import asyncio
+
 from config.config import config
 from core.graph import WorkflowOrchestrator
+from core.bisheng_workflow_import_client import create_workflow_from_json
 from main import save_workflow
-from models.progress import ProgressEvent, ProgressEventType
+from models.progress import ProgressEvent, ProgressEventType, AgentName
 
 
 # 配置日志 - 使用 UTF-8 编码的 StreamHandler
@@ -127,6 +131,9 @@ class GenerateResponse(BaseModel):
     workflow: Optional[dict] = None
     metadata: Optional[dict] = None
     error: Optional[str] = None
+    file_path: Optional[str] = None
+    import_result: Optional[dict] = None
+    import_error: Optional[str] = None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -150,6 +157,36 @@ async def root():
 def _get_access_token(request: Request) -> str:
     """从请求 Cookie 取 token（正式环境由前端登录后携带）。"""
     return request.cookies.get("access_token_cookie") or ""
+
+
+async def _import_workflow_to_bisheng(
+    base_url: str,
+    token: str,
+    workflow: dict,
+    name: str | None = None,
+    description: str = "",
+    publish: bool = True,
+) -> dict:
+    """
+    将工作流 JSON 导入到毕昇平台（异步封装，避免阻塞）。
+    Token 由前端配置或请求 Cookie access_token_cookie 提供。
+    """
+    if not token:
+        raise ValueError("无法导入：请在前端登录或携带 Cookie access_token_cookie")
+    name = name or workflow.get("name") or "导入的工作流"
+    description = description or workflow.get("description") or ""
+
+    def _do_import() -> dict:
+        return create_workflow_from_json(
+            base_url=base_url,
+            token=token,
+            flow_data=workflow,
+            name=name,
+            description=description,
+            publish=publish,
+        )
+
+    return await asyncio.to_thread(_do_import)
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
@@ -184,6 +221,28 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
                 filepath = save_workflow(workflow)
                 result["file_path"] = str(filepath)
                 logger.info(f"工作流已保存：{filepath}")
+
+            # 可选：自动导入到毕昇（仅由请求 body 中 config.auto_import 控制）
+            auto_import = (request.config or {}).get("auto_import", False)
+            if auto_import and workflow:
+                try:
+                    name = workflow.get("name")
+                    if not name and isinstance(result.get("metadata"), dict):
+                        intent = result["metadata"].get("intent")
+                        if isinstance(intent, dict) and intent.get("rewritten_input"):
+                            name = intent["rewritten_input"][:50]
+                    import_result = await _import_workflow_to_bisheng(
+                        base_url=config.bisheng_base_url,
+                        token=token,
+                        workflow=workflow,
+                        name=name,
+                        publish=True,
+                    )
+                    result["import_result"] = import_result
+                    logger.info("工作流已导入毕昇：flow_id=%s", import_result.get("flow_id"))
+                except Exception as e:
+                    result["import_error"] = str(e)
+                    logger.warning("导入毕昇失败：%s", e)
 
             return GenerateResponse(**result)
         else:
@@ -269,6 +328,59 @@ async def download_workflow(filename: str):
 async def health_check():
     """健康检查接口"""
     return {"status": "healthy", "version": "0.2.0"}
+
+
+class ImportWorkflowRequest(BaseModel):
+    """手动导入工作流到毕昇的请求体"""
+
+    workflow: Optional[dict] = None
+    """工作流 JSON，与 filename 二选一"""
+    filename: Optional[str] = None
+    """已保存的工作流文件名（如 workflow_123.json），与 workflow 二选一"""
+    name: Optional[str] = None
+    """工作流名称，不传则用 workflow 内的 name 或默认「导入的工作流」"""
+    publish: bool = True
+    """是否创建后立即上线"""
+
+
+@app.post("/api/workflow/import")
+async def import_workflow_to_bisheng(
+    body: ImportWorkflowRequest,
+    fastapi_request: Request,
+):
+    """
+    将工作流导入到毕昇平台（手动调用）。
+    需在 Cookie 中携带 access_token_cookie（前端登录后由毕昇写入）。
+    """
+    token = _get_access_token(fastapi_request)
+    workflow = None
+    if body.workflow:
+        workflow = body.workflow
+    elif body.filename:
+        filepath = Path("output") / body.filename
+        if not filepath.exists():
+            raise HTTPException(status_code=404, detail=f"文件不存在：{body.filename}")
+        with open(filepath, "r", encoding="utf-8") as f:
+            workflow = json.load(f)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="请提供 workflow（JSON）或 filename（已保存的文件名）",
+        )
+    if not workflow or not workflow.get("nodes") or not workflow.get("edges"):
+        raise HTTPException(status_code=400, detail="工作流格式无效：需包含 nodes 和 edges")
+    try:
+        result = await _import_workflow_to_bisheng(
+            base_url=config.bisheng_base_url,
+            token=token,
+            workflow=workflow,
+            name=body.name,
+            publish=body.publish,
+        )
+        return {"status": "success", "message": "已导入到毕昇", "import_result": result}
+    except Exception as e:
+        logger.warning("导入毕昇失败：%s", e)
+        raise HTTPException(status_code=502, detail=f"导入失败：{str(e)}")
 
 
 @app.post("/api/generate/stream")
@@ -418,7 +530,7 @@ async def generate_workflow_stream(
 
 async def run_generation(
     query: str,
-    config: Optional[dict],
+    request_config: Optional[dict],
     progress_callback,
     access_token: Optional[str] = None,
     base_url: str = "",
@@ -428,7 +540,7 @@ async def run_generation(
 
     Args:
         query: 用户查询
-        config: 配置
+        request_config: 请求体中的 config（可选）
         progress_callback: 进度回调
         access_token: 毕昇 access_token（Cookie 或配置），用于按用户加载知识库
         base_url: 毕昇 API base_url，用于拉取知识库列表
@@ -439,7 +551,7 @@ async def run_generation(
     logger.info("run_generation 开始，query=%s", query[:50])
     try:
         orchestrator = WorkflowOrchestrator(
-            config_obj=config, progress_callback=progress_callback
+            config_obj=request_config, progress_callback=progress_callback
         )
         await orchestrator.knowledge_agent.load_knowledge_catalog(
             base_url=base_url,
@@ -456,15 +568,48 @@ async def run_generation(
                 filepath = save_workflow(workflow)
                 result["file_path"] = str(filepath)
                 logger.info("工作流已保存，path=%s", filepath)
+
+            # 可选：自动导入到毕昇（仅由请求 body 中 config.auto_import 控制）
+            auto_import = (request_config or {}).get("auto_import", False)
+            if auto_import and workflow and progress_callback:
+                await progress_callback(ProgressEvent.create_agent_start_event(AgentName.IMPORT))
+                start_ts = time.time()
+                try:
+                    import_result = await _import_workflow_to_bisheng(
+                        base_url=base_url,
+                        token=access_token or "",
+                        workflow=workflow,
+                        name=workflow.get("name"),
+                        publish=True,
+                    )
+                    result["import_result"] = import_result
+                    duration_ms = (time.time() - start_ts) * 1000
+                    await progress_callback(
+                        ProgressEvent.create_agent_complete_event(
+                            AgentName.IMPORT,
+                            {
+                                "flow_id": import_result.get("flow_id"),
+                                "version_id": import_result.get("version_id"),
+                                "published": import_result.get("published"),
+                            },
+                            duration_ms,
+                        )
+                    )
+                    logger.info("工作流已导入毕昇：flow_id=%s", import_result.get("flow_id"))
+                except Exception as e:
+                    result["import_error"] = str(e)
+                    duration_ms = (time.time() - start_ts) * 1000
+                    await progress_callback(
+                        ProgressEvent.create_agent_error_event(
+                            AgentName.IMPORT, str(e), duration_ms
+                        )
+                    )
+                    logger.warning("导入毕昇失败：%s", e)
         return result
 
     except Exception as e:
         logger.error(f"生成工作流失败：{e}", exc_info=True)
         return {"status": "error", "message": f"生成失败：{str(e)}"}
-
-
-# 需要导入 asyncio
-import asyncio
 
 
 def main():

@@ -43,6 +43,9 @@ class AgentName(str, Enum):
     WORKFLOW_GENERATION = "workflow_generation"
     """工作流生成 Agent"""
 
+    IMPORT = "import"
+    """导入到毕昇平台"""
+
 
 class ProgressEvent(BaseModel):
     """
@@ -135,12 +138,13 @@ class ProgressEvent(BaseModel):
             AgentName.INTENT_UNDERSTANDING: "意图理解",
             AgentName.TOOL_SELECTION: "工具选择",
             AgentName.KNOWLEDGE_MATCHING: "知识库匹配",
-            AgentName.WORKFLOW_GENERATION: "工作流生成"
+            AgentName.WORKFLOW_GENERATION: "工作流生成",
+            AgentName.IMPORT: "导入到毕昇",
         }
         return cls(
             event_type=ProgressEventType.AGENT_START,
             agent_name=agent_name,
-            message=f"⏳ 正在执行：{agent_display_names[agent_name]}",
+            message=f"⏳ 正在执行：{agent_display_names.get(agent_name, agent_name)}",
             progress=cls._get_agent_progress(agent_name) - 12.5
         )
     
@@ -156,7 +160,8 @@ class ProgressEvent(BaseModel):
             AgentName.INTENT_UNDERSTANDING: "意图理解",
             AgentName.TOOL_SELECTION: "工具选择",
             AgentName.KNOWLEDGE_MATCHING: "知识库匹配",
-            AgentName.WORKFLOW_GENERATION: "工作流生成"
+            AgentName.WORKFLOW_GENERATION: "工作流生成",
+            AgentName.IMPORT: "导入到毕昇",
         }
         
         # 根据 Agent 类型生成不同的消息
@@ -183,13 +188,14 @@ class ProgressEvent(BaseModel):
             AgentName.INTENT_UNDERSTANDING: "意图理解",
             AgentName.TOOL_SELECTION: "工具选择",
             AgentName.KNOWLEDGE_MATCHING: "知识库匹配",
-            AgentName.WORKFLOW_GENERATION: "工作流生成"
+            AgentName.WORKFLOW_GENERATION: "工作流生成",
+            AgentName.IMPORT: "导入到毕昇",
         }
         
         return cls(
             event_type=ProgressEventType.AGENT_ERROR,
             agent_name=agent_name,
-            message=f"❌ {agent_display_names[agent_name]}失败",
+            message=f"❌ {agent_display_names.get(agent_name, agent_name)}失败",
             error=error,
             duration_ms=duration_ms,
             progress=cls._get_agent_progress(agent_name) - 12.5
@@ -225,7 +231,8 @@ class ProgressEvent(BaseModel):
             AgentName.INTENT_UNDERSTANDING: 25.0,
             AgentName.TOOL_SELECTION: 50.0,
             AgentName.KNOWLEDGE_MATCHING: 75.0,
-            AgentName.WORKFLOW_GENERATION: 100.0
+            AgentName.WORKFLOW_GENERATION: 95.0,
+            AgentName.IMPORT: 100.0,
         }
         return progress_map.get(agent_name, 0.0)
     
@@ -246,6 +253,10 @@ class ProgressEvent(BaseModel):
         
         elif agent_name == AgentName.WORKFLOW_GENERATION:
             return "✅ 工作流生成完成"
+        
+        elif agent_name == AgentName.IMPORT:
+            flow_id = data.get("flow_id", "")
+            return f"✅ 已导入到毕昇：flow_id={flow_id}" if flow_id else "✅ 导入到毕昇完成"
         
         return f"✅ {agent_name} 完成"
     

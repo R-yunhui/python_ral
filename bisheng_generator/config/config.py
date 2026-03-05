@@ -1,7 +1,7 @@
 """配置管理模块"""
 
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 import os
 from dotenv import load_dotenv
 
@@ -70,15 +70,11 @@ class Config(BaseModel):
         description="工作流生成节点最大重试次数，默认 2（共 3 次调用）",
     )
 
-    # 毕昇平台配置（知识库列表等接口）
+    # 毕昇平台配置（仅保留地址；Token 由前端配置，上线后从 Cookie 获取）
     bisheng_base_url: str = Field(
         default_factory=lambda: os.getenv("BISHENG_BASE_URL", "http://localhost:3001"),
-        description="毕昇接口域名，用于获取知识库列表等",
+        description="毕昇接口地址，用于知识库列表、工作流导入等",
     )
-    bisheng_api_url: str = Field(
-        default="http://localhost:7860", description="毕昇 API 地址（兼容旧配置）"
-    )
-    bisheng_api_key: Optional[str] = Field(default=None, description="毕昇 API Key")
 
     # 服务配置
     service_host: str = Field(default="0.0.0.0", description="服务监听地址")
@@ -102,8 +98,7 @@ class Config(BaseModel):
             "base_url": self.llm_base_url,
             "temperature": self.llm_temperature,
             "embedding_model": self.embedding_model,
-            "bisheng_url": self.bisheng_api_url,
-            "bisheng_api_key": self.bisheng_api_key,
+            "bisheng_url": self.bisheng_base_url,
             "bocha_search_api_key": self.bocha_search_api_key,
         }
 
