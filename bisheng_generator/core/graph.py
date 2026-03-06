@@ -1,138 +1,32 @@
-"""LangGraph 编排模块 - 包含 BaseChatModel 初始化和工作流编排"""
+"""LangGraph 编排模块 - 工作流图构建与对外入口"""
 
-from typing import (
-    Optional,
-    Dict,
-    Any,
-    TypedDict,
-    Callable,
-    Awaitable,
-    List,
-    NotRequired,
-)
-import json
 import logging
-import time
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from langchain_openai import ChatOpenAI
-from langchain_core.language_models import BaseChatModel
-from langchain_core.embeddings import Embeddings
 from langgraph.graph import StateGraph, START, END
-from langgraph.types import interrupt, Command
+from langgraph.types import Command
 from langgraph.checkpoint.memory import InMemorySaver
 
 from config.config import Config, config
-from core.utils import is_retryable
-from models.intent import EnhancedIntent
+from core.state import WorkflowState
+from core.model_factory import ModelInitializer, create_llm
+from core.nodes import (
+    NodeContext,
+    run_intent_understanding,
+    run_tool_selection,
+    run_knowledge_matching,
+    run_workflow_generation,
+)
 from agents.user_agent import UserAgent
 from agents.tool_agent import ToolAgent, ToolPlan
 from agents.knowledge_agent import KnowledgeAgent, KnowledgeMatch
 from agents.workflow_agent import WorkflowAgent
-from models.progress import (
-    ProgressEvent,
-    AgentName,
-)
+from models.progress import ProgressEvent
 
 logger = logging.getLogger(__name__)
 
 # 定义事件回调类型
 ProgressCallback = Callable[[ProgressEvent], Awaitable[None]]
-
-
-class ModelInitializer:
-    """模型初始化器"""
-
-    _llm_instance: Optional[BaseChatModel] = None
-    _embedding_instance: Optional[Embeddings] = None
-
-    @classmethod
-    def get_llm(cls, config_obj: Optional[Config] = None) -> BaseChatModel:
-        """
-        获取 LLM 实例（单例模式）
-
-        Args:
-            config_obj: Config 配置对象，如果不传则使用全局配置
-
-        Returns:
-            BaseChatModel 实例
-        """
-        if cls._llm_instance is not None:
-            return cls._llm_instance
-
-        # 使用传入的 config 对象或全局配置
-        cfg = config_obj or config
-
-        logger.info(f"初始化 LLM: provider={cfg.llm_provider}, model={cfg.llm_model}")
-
-        # 使用 OpenAI 兼容接口（DashScope 也使用此格式）
-        cls._llm_instance = ChatOpenAI(
-            model=cfg.llm_model,
-            api_key=cfg.llm_api_key,
-            base_url=cfg.llm_base_url,
-            temperature=cfg.llm_temperature,
-            streaming=True,  # 启用流式输出
-            max_tokens=None,  # 不限制最大 token 数
-            model_kwargs={
-                "stream_options": {
-                    "include_usage": True,
-                }
-            },
-            extra_body={
-                "enable_thinking": False,
-            }
-        )
-
-        logger.info("LLM 初始化成功")
-        return cls._llm_instance
-
-    @classmethod
-    def get_embedding(cls, config_obj: Optional[Config] = None) -> Optional[Embeddings]:
-        """
-        获取 Embedding 实例（预留）
-
-        Args:
-            config_obj: Config 配置对象
-
-        Returns:
-            Embeddings 实例
-        """
-        if cls._embedding_instance is not None:
-            return cls._embedding_instance
-
-        cfg = config_obj or config
-
-        logger.info(f"初始化 Embedding: model={cfg.embedding_model}")
-
-        # TODO: 实现 Embedding 初始化
-        # 可以使用 DashScope 的 embedding 模型
-        # from langchain_community.embeddings import DashScopeEmbeddings
-        # cls._embedding_instance = DashScopeEmbeddings(
-        #     model=cfg.embedding_model,
-        #     api_key=cfg.llm_api_key,
-        #     dashscope_api_base=cfg.llm_base_url
-        # )
-
-        logger.warning("Embedding 暂未实现")
-        return None
-
-    @classmethod
-    def reset(cls):
-        """重置模型实例（用于测试）"""
-        cls._llm_instance = None
-        cls._embedding_instance = None
-
-
-class WorkflowState(TypedDict):
-    """工作流编排状态"""
-
-    user_input: str
-    intent: Optional[EnhancedIntent]
-    tool_plan: Optional[ToolPlan]
-    knowledge_match: Optional[KnowledgeMatch]
-    workflow: Optional[Dict[str, Any]]
-    error: Optional[str]
-    warnings: NotRequired[Optional[List[str]]]
-    session_id: NotRequired[Optional[str]]
 
 
 class WorkflowOrchestrator:
@@ -158,16 +52,35 @@ class WorkflowOrchestrator:
 
         # ========== 初始化模型 ==========
         self.llm = ModelInitializer.get_llm(self.config)
-        self.embedding = ModelInitializer.get_embedding(self.config)
+        llm_intent = ModelInitializer.get_llm_for_intent(self.config)
+        llm_workflow = ModelInitializer.get_llm_for_workflow(self.config)
 
         # ========== 初始化 Agent ==========
-        self.user_agent = UserAgent(self.llm, self.embedding)
+        self.user_agent = UserAgent(
+            llm_intent,
+            prompts_dir=self.config.prompts_dir or None,
+        )
         self.tool_agent = ToolAgent(
             mcp_search_url=self.config.mcp_search_url,
             mcp_search_top_k=self.config.mcp_search_top_k,
         )
-        self.knowledge_agent = KnowledgeAgent(self.llm, self.embedding)
-        self.workflow_agent = WorkflowAgent(self.llm)
+        self.knowledge_agent = KnowledgeAgent(
+            self.llm,
+            prompts_dir=self.config.prompts_dir or None,
+        )
+        self.workflow_agent = WorkflowAgent(
+            llm_workflow,
+            prompts_dir=self.config.prompts_dir or None,
+        )
+
+        self._node_ctx = NodeContext(
+            config=self.config,
+            user_agent=self.user_agent,
+            tool_agent=self.tool_agent,
+            knowledge_agent=self.knowledge_agent,
+            workflow_agent=self.workflow_agent,
+            emit_progress=self._emit_progress,
+        )
 
         # ========== 构建 LangGraph ==========
         self.graph = self._build_graph()
@@ -255,442 +168,29 @@ class WorkflowOrchestrator:
         logger.info(f"并行路由触发：激活节点 {targets}")
         return targets
 
-    async def _run_intent_understanding(self, state: WorkflowState) -> WorkflowState:
-        """运行意图理解 Agent（含重试、降级、interrupt 澄清）
+    async def _run_intent_understanding(
+        self, state: WorkflowState
+    ) -> Dict[str, Any]:
+        """运行意图理解节点（委托到 core.nodes.intent_node）。"""
+        return await run_intent_understanding(state, self._node_ctx)
 
-        恢复时 LangGraph 会从节点开头重新执行整个节点，但 interrupt()
-        在第二次执行时直接返回 resume 值而不再暂停。
-        """
-        user_input = state.get("user_input") or ""
-        logger.info(
-            "意图理解开始",
-            extra={"user_input_preview": user_input[:100] if user_input else ""},
-        )
+    async def _run_tool_selection(
+        self, state: WorkflowState
+    ) -> Dict[str, Any]:
+        """运行工具选择节点（委托到 core.nodes.tool_node）。"""
+        return await run_tool_selection(state, self._node_ctx)
 
-        start_time = time.time()
-        await self._emit_progress(
-            ProgressEvent.create_agent_start_event(AgentName.INTENT_UNDERSTANDING)
-        )
+    async def _run_knowledge_matching(
+        self, state: WorkflowState
+    ) -> Dict[str, Any]:
+        """运行知识库匹配节点（委托到 core.nodes.knowledge_node）。"""
+        return await run_knowledge_matching(state, self._node_ctx)
 
-        # --- 第一段：首轮 LLM 分析（恢复后也会重跑一次） ---
-        intent = await self._understand_with_retry(user_input, state, start_time)
-        if intent is None:
-            # _understand_with_retry 已在内部设了 error / 降级
-            return state
-
-        # --- 第二段：若需澄清 → interrupt ---
-        if intent.needs_clarification and intent.clarification_questions:
-            pending = {
-                "questions": intent.clarification_questions,
-                "message": "请补充以下信息，以便更准确生成工作流",
-                "rewritten_input_preview": intent.rewritten_input,
-                "original_user_input": user_input,
-            }
-            logger.info(
-                "意图需要澄清，触发 interrupt，questions=%s",
-                intent.clarification_questions,
-            )
-            # 首轮在此暂停；恢复后 interrupt() 直接返回 resume 值
-            user_reply = interrupt(pending)
-            logger.info("interrupt 恢复，user_reply=%s", (str(user_reply) or "")[:100])
-
-            # --- 第三段：恢复后合并意图 ---
-            chat_history = [
-                {"role": "user", "content": user_input},
-                {
-                    "role": "assistant",
-                    "content": json.dumps(pending, ensure_ascii=False),
-                },
-            ]
-            merged = await self._understand_with_retry(
-                str(user_reply), state, start_time, chat_history=chat_history
-            )
-            if merged is None:
-                return state
-            merged.needs_clarification = False
-            merged.clarification_questions = []
-            intent = merged
-
-        # --- 发送完成事件 ---
-        duration_ms = (time.time() - start_time) * 1000
-        event_data = {
-            "workflow_type": intent.get_workflow_type(),
-            "needs_tool": intent.needs_tool,
-            "needs_knowledge": intent.needs_knowledge,
-            "rewritten_input": intent.rewritten_input,
-        }
-        await self._emit_progress(
-            ProgressEvent.create_agent_complete_event(
-                AgentName.INTENT_UNDERSTANDING, event_data, duration_ms
-            )
-        )
-        return {"intent": intent}
-
-    async def _understand_with_retry(
-        self,
-        user_input: str,
-        state: WorkflowState,
-        start_time: float,
-        chat_history=None,
-    ) -> Optional[EnhancedIntent]:
-        """带重试与降级的 understand 调用，返回 None 表示已写入 state error/降级。"""
-        last_error: Optional[Exception] = None
-        for attempt in range(config.max_retries_intent + 1):
-            try:
-                intent = await self.user_agent.understand(
-                    user_input, chat_history=chat_history
-                )
-                if intent.rewritten_input:
-                    return intent
-                last_error = ValueError("意图理解返回空结果")
-            except Exception as e:
-                last_error = e
-                if not is_retryable(e):
-                    duration_ms = (time.time() - start_time) * 1000
-                    logger.exception("意图理解失败(不可重试)：%s", e)
-                    await self._emit_progress(
-                        ProgressEvent.create_agent_error_event(
-                            AgentName.INTENT_UNDERSTANDING, str(e), duration_ms
-                        )
-                    )
-                    state["error"] = f"意图理解失败：{str(e)}"
-                    return None
-                if attempt == config.max_retries_intent:
-                    break
-                logger.warning(
-                    "意图理解重试",
-                    extra={"attempt": attempt + 1, "reason": str(e)},
-                )
-
-        # 降级
-        duration_ms = (time.time() - start_time) * 1000
-        fallback_intent = EnhancedIntent(
-            original_input=user_input,
-            rewritten_input=user_input,
-            needs_tool=False,
-            needs_knowledge=False,
-            multi_turn=True,
-        )
-        logger.warning("意图理解降级：使用原始输入作为重写结果")
-        await self._emit_progress(
-            ProgressEvent.create_agent_complete_event(
-                AgentName.INTENT_UNDERSTANDING,
-                {
-                    "workflow_type": fallback_intent.get_workflow_type(),
-                    "needs_tool": False,
-                    "needs_knowledge": False,
-                    "rewritten_input": user_input,
-                    "degraded": True,
-                },
-                duration_ms,
-            )
-        )
-        return fallback_intent
-
-    async def _run_tool_selection(self, state: WorkflowState) -> WorkflowState:
-        """运行工具选择 Agent（含重试与降级）"""
-        intent = state.get("intent")
-        needs_tool = bool(intent and intent.needs_tool)
-        logger.info(
-            "工具选择开始",
-            extra={"needs_tool": needs_tool},
-        )
-
-        start_time = time.time()
-        await self._emit_progress(
-            ProgressEvent.create_agent_start_event(AgentName.TOOL_SELECTION)
-        )
-
-        if not intent or not intent.needs_tool:
-            tool_plan = ToolPlan()
-            duration_ms = (time.time() - start_time) * 1000
-            logger.info("工具选择跳过(不需要工具)", extra={"needs_tool": False})
-            await self._emit_progress(
-                ProgressEvent.create_agent_complete_event(
-                    AgentName.TOOL_SELECTION,
-                    {"tools_count": 0, "message": "不需要调用工具，跳过工具选择"},
-                    duration_ms,
-                )
-            )
-            return {"tool_plan": tool_plan}
-
-        last_error: Optional[Exception] = None
-        for attempt in range(config.max_retries_tool + 1):
-            try:
-                tool_plan = await self.tool_agent.select_tools(intent)
-                duration_ms = (time.time() - start_time) * 1000
-                logger.info(
-                    "工具选择完成",
-                    extra={
-                        "selected_count": len(tool_plan.selected_tools),
-                        "tool_keys": [t.tool_key for t in tool_plan.selected_tools],
-                    },
-                )
-                event_data = {
-                    "tools_count": len(tool_plan.selected_tools),
-                    "selected_tools": (
-                        [
-                            {"name": t.name, "description": t.desc}
-                            for t in tool_plan.selected_tools
-                        ]
-                        if tool_plan.selected_tools
-                        else []
-                    ),
-                }
-                await self._emit_progress(
-                    ProgressEvent.create_agent_complete_event(
-                        AgentName.TOOL_SELECTION, event_data, duration_ms
-                    )
-                )
-                return {"tool_plan": tool_plan}
-            except Exception as e:
-                last_error = e
-                if not is_retryable(e):
-                    duration_ms = (time.time() - start_time) * 1000
-                    logger.exception("工具选择失败(不可重试)：%s", e)
-                    await self._emit_progress(
-                        ProgressEvent.create_agent_error_event(
-                            AgentName.TOOL_SELECTION, str(e), duration_ms
-                        )
-                    )
-                    return {"error": f"工具选择失败：{str(e)}"}
-                if attempt == config.max_retries_tool:
-                    break
-                logger.warning(
-                    "工具选择重试",
-                    extra={"attempt": attempt + 1, "reason": str(e)},
-                )
-
-        # 降级：返回空工具列表
-        duration_ms = (time.time() - start_time) * 1000
-        logger.warning(
-            "工具选择降级：返回空工具列表",
-            extra={"reason": str(last_error) if last_error else "unknown"},
-        )
-        await self._emit_progress(
-            ProgressEvent.create_agent_complete_event(
-                AgentName.TOOL_SELECTION,
-                {
-                    "tools_count": 0,
-                    "message": "工具选择失败，已降级为空列表",
-                    "degraded": True,
-                },
-                duration_ms,
-            )
-        )
-        warnings = list(state.get("warnings") or [])
-        warnings.append("工具选择失败，已使用空工具列表")
-        return {"tool_plan": ToolPlan(), "warnings": warnings}
-
-    async def _run_knowledge_matching(self, state: WorkflowState) -> WorkflowState:
-        """运行知识库匹配 Agent（含重试与降级）"""
-        intent = state.get("intent")
-        needs_knowledge = bool(intent and intent.needs_knowledge)
-        logger.info(
-            "知识库匹配开始",
-            extra={"needs_knowledge": needs_knowledge},
-        )
-
-        start_time = time.time()
-        await self._emit_progress(
-            ProgressEvent.create_agent_start_event(AgentName.KNOWLEDGE_MATCHING)
-        )
-
-        if not intent or not intent.needs_knowledge:
-            knowledge_match = KnowledgeMatch(required=False)
-            duration_ms = (time.time() - start_time) * 1000
-            logger.info(
-                "知识库匹配跳过(不需要知识库)", extra={"needs_knowledge": False}
-            )
-            await self._emit_progress(
-                ProgressEvent.create_agent_complete_event(
-                    AgentName.KNOWLEDGE_MATCHING,
-                    {
-                        "knowledge_count": 0,
-                        "message": "不需要知识库，跳过知识库匹配",
-                    },
-                    duration_ms,
-                )
-            )
-            return {"knowledge_match": knowledge_match}
-
-        last_error: Optional[Exception] = None
-        for attempt in range(config.max_retries_knowledge + 1):
-            try:
-                knowledge_match = await self.knowledge_agent.match_knowledge(intent)
-                duration_ms = (time.time() - start_time) * 1000
-                logger.info(
-                    "知识库匹配完成",
-                    extra={
-                        "matched_count": len(knowledge_match.matched_knowledge_bases),
-                        "kb_ids": [
-                            kb.id for kb in knowledge_match.matched_knowledge_bases
-                        ],
-                    },
-                )
-                event_data = {
-                    "knowledge_count": len(knowledge_match.matched_knowledge_bases),
-                    "matched_knowledge_bases": (
-                        [
-                            {"name": kb.name, "description": kb.desc}
-                            for kb in knowledge_match.matched_knowledge_bases
-                        ]
-                        if knowledge_match.matched_knowledge_bases
-                        else []
-                    ),
-                }
-                await self._emit_progress(
-                    ProgressEvent.create_agent_complete_event(
-                        AgentName.KNOWLEDGE_MATCHING, event_data, duration_ms
-                    )
-                )
-                return {"knowledge_match": knowledge_match}
-            except Exception as e:
-                last_error = e
-                if not is_retryable(e):
-                    duration_ms = (time.time() - start_time) * 1000
-                    logger.exception("知识库匹配失败(不可重试)：%s", e)
-                    await self._emit_progress(
-                        ProgressEvent.create_agent_error_event(
-                            AgentName.KNOWLEDGE_MATCHING, str(e), duration_ms
-                        )
-                    )
-                    return {"error": f"知识库匹配失败：{str(e)}"}
-                if attempt == config.max_retries_knowledge:
-                    break
-                logger.warning(
-                    "知识库匹配重试",
-                    extra={"attempt": attempt + 1, "reason": str(e)},
-                )
-
-        # 降级：返回空知识库列表
-        duration_ms = (time.time() - start_time) * 1000
-        logger.warning(
-            "知识库匹配降级：返回空知识库列表",
-            extra={"reason": str(last_error) if last_error else "unknown"},
-        )
-        await self._emit_progress(
-            ProgressEvent.create_agent_complete_event(
-                AgentName.KNOWLEDGE_MATCHING,
-                {
-                    "knowledge_count": 0,
-                    "message": "知识库匹配失败，已降级为空列表",
-                    "degraded": True,
-                },
-                duration_ms,
-            )
-        )
-        warnings = list(state.get("warnings") or [])
-        warnings.append("知识库匹配失败，已使用空知识库列表")
-        return {
-            "knowledge_match": KnowledgeMatch(required=False),
-            "warnings": warnings,
-        }
-
-    async def _run_workflow_generation(self, state: WorkflowState) -> WorkflowState:
-        """运行工作流生成 Agent（含重试与详细日志）"""
-        start_time = time.time()
-        await self._emit_progress(
-            ProgressEvent.create_agent_start_event(AgentName.WORKFLOW_GENERATION)
-        )
-
-        if state.get("error"):
-            duration_ms = (time.time() - start_time) * 1000
-            await self._emit_progress(
-                ProgressEvent.create_agent_error_event(
-                    AgentName.WORKFLOW_GENERATION,
-                    f"前置步骤错误：{state.get('error')}",
-                    duration_ms,
-                )
-            )
-            return state
-
-        intent = state.get("intent")
-        if not intent:
-            error_msg = "意图理解失败，无法生成工作流"
-            logger.error(error_msg)
-            duration_ms = (time.time() - start_time) * 1000
-            await self._emit_progress(
-                ProgressEvent.create_agent_error_event(
-                    AgentName.WORKFLOW_GENERATION, error_msg, duration_ms
-                )
-            )
-            return {"error": error_msg}
-
-        tool_plan = state.get("tool_plan") or ToolPlan()
-        knowledge_match = state.get("knowledge_match") or KnowledgeMatch(required=False)
-
-        last_error: Optional[str] = None
-        workflow_result: Optional[Dict[str, Any]] = None
-        for attempt in range(config.max_retries_workflow + 1):
-            try:
-                workflow_result = await self.workflow_agent.generate_workflow(
-                    intent=intent,
-                    tool_plan=tool_plan,
-                    knowledge_match=knowledge_match,
-                )
-                if isinstance(workflow_result, dict) and "error" in workflow_result:
-                    last_error = workflow_result.get("error", "工作流生成内容无效")
-                    content_preview = (workflow_result.get("content") or "")[:200]
-                    if attempt < config.max_retries_workflow:
-                        logger.warning(
-                            "工作流生成重试",
-                            extra={
-                                "attempt": attempt + 1,
-                                "reason": last_error,
-                                "content_preview": content_preview,
-                            },
-                        )
-                        continue
-                    break
-                # 成功：无 error 键
-                duration_ms = (time.time() - start_time) * 1000
-                logger.info(
-                    "工作流生成完成",
-                    extra={"nodes_count": len(workflow_result.get("nodes", []))},
-                )
-                await self._emit_progress(
-                    ProgressEvent.create_agent_complete_event(
-                        AgentName.WORKFLOW_GENERATION,
-                        {"workflow_generated": True},
-                        duration_ms,
-                    )
-                )
-                return {"workflow": workflow_result}
-            except Exception as e:
-                last_error = str(e)
-                if not is_retryable(e):
-                    duration_ms = (time.time() - start_time) * 1000
-                    logger.exception("工作流生成失败(不可重试)：%s", e)
-                    await self._emit_progress(
-                        ProgressEvent.create_agent_error_event(
-                            AgentName.WORKFLOW_GENERATION, str(e), duration_ms
-                        )
-                    )
-                    return {"error": f"工作流生成失败：{str(e)}"}
-                if attempt < config.max_retries_workflow:
-                    logger.warning(
-                        "工作流生成重试",
-                        extra={"attempt": attempt + 1, "reason": str(e)},
-                    )
-                else:
-                    logger.error(
-                        "工作流生成失败(已用尽重试)",
-                        extra={
-                            "reason": str(e),
-                            "intent_preview": (intent.rewritten_input or "")[:80],
-                        },
-                    )
-
-        # 重试用尽
-        duration_ms = (time.time() - start_time) * 1000
-        error_msg = last_error or "工作流生成失败"
-        await self._emit_progress(
-            ProgressEvent.create_agent_error_event(
-                AgentName.WORKFLOW_GENERATION, error_msg, duration_ms
-            )
-        )
-        return {"error": f"工作流生成失败：{error_msg}"}
+    async def _run_workflow_generation(
+        self, state: WorkflowState
+    ) -> Dict[str, Any]:
+        """运行工作流生成节点（委托到 core.nodes.workflow_node）。"""
+        return await run_workflow_generation(state, self._node_ctx)
 
     async def generate(
         self,
@@ -903,32 +403,3 @@ class WorkflowOrchestrator:
                 await self.progress_callback(event)
             except Exception as e:
                 logger.error(f"发送进度事件失败：{e}")
-
-
-# ========== 便捷函数 ==========
-
-
-def create_llm(config_obj: Optional[Config] = None) -> BaseChatModel:
-    """
-    创建 LLM 实例的便捷函数
-
-    Args:
-        config_obj: Config 配置对象
-
-    Returns:
-        BaseChatModel 实例
-    """
-    return ModelInitializer.get_llm(config_obj)
-
-
-def create_embedding(config_obj: Optional[Config] = None) -> Optional[Embeddings]:
-    """
-    创建 Embedding 实例的便捷函数
-
-    Args:
-        config_obj: Config 配置对象
-
-    Returns:
-        Embeddings 实例
-    """
-    return ModelInitializer.get_embedding(config_obj)

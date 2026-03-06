@@ -22,6 +22,7 @@ from models.intent import EnhancedIntent
 from agents.tool_agent import ToolPlan
 from agents.knowledge_agent import KnowledgeMatch
 from core.utils import extract_json
+from core.prompt_loader import get_prompt_loader
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,13 @@ logger = logging.getLogger(__name__)
 class WorkflowAgent:
     """工作流生成专家"""
 
-    def __init__(self, llm: BaseChatModel):
+    def __init__(
+        self,
+        llm: BaseChatModel,
+        prompts_dir: Optional[str] = None,
+    ):
         self.llm = llm
+        self._prompts_dir = prompts_dir
         self._tools: Optional[List] = None
         self._usage_callback = UsageMetadataCallbackHandler()
 
@@ -87,19 +93,32 @@ class WorkflowAgent:
         catalog = await self._get_skills_catalog()
         instructions = get_tools_usage_instructions()
 
-        system_prompt = f"""你是一个专业的毕昇工作流生成专家，可以使用以下技能和数据完成毕升工作流的创建：
+        user_analysis = f"""需求描述：{intent.rewritten_input}
+工作流类型：{intent.get_workflow_type()}
+复杂度：{intent.complexity_hint}
+是否需要工具：{intent.needs_tool}
+是否需要知识库：{intent.needs_knowledge}
+是否多轮对话：{intent.multi_turn}"""
+
+        loader = get_prompt_loader(self._prompts_dir)
+        system_tpl = loader.load("workflow/system.md")
+        if system_tpl:
+            system_prompt = system_tpl.format(
+                catalog=catalog,
+                instructions=instructions,
+                user_analysis=user_analysis,
+                tools_info=tools_info,
+                knowledge_info=knowledge_info,
+            )
+        else:
+            system_prompt = f"""你是一个专业的毕昇工作流生成专家，可以使用以下技能和数据完成毕升工作流的创建：
 
 {catalog}
 
 {instructions}
 
 【用户需求分析】
-需求描述：{intent.rewritten_input}
-工作流类型：{intent.get_workflow_type()}
-复杂度：{intent.complexity_hint}
-是否需要工具：{intent.needs_tool}
-是否需要知识库：{intent.needs_knowledge}
-是否多轮对话：{intent.multi_turn}
+{user_analysis}
 
 【候选资源（按需选用，不必全部使用）】
 
@@ -122,6 +141,13 @@ class WorkflowAgent:
 - 确保 JSON 格式正确，可以被 json.loads() 解析
 """
 
+        user_msg_tpl = loader.load("workflow/user_message.txt")
+        user_message = (
+            user_msg_tpl.format(intent_rewritten_input=intent.rewritten_input)
+            if user_msg_tpl
+            else f"请根据提供的上下文信息，生成一个完整的毕昇工作流。用户需求：{intent.rewritten_input}"
+        )
+
         agent = create_agent(
             model=self.llm,
             tools=await self._get_tools(),
@@ -135,7 +161,7 @@ class WorkflowAgent:
                 "messages": [
                     {
                         "role": "user",
-                        "content": f"请根据提供的上下文信息，生成一个完整的毕昇工作流。用户需求：{intent.rewritten_input}",
+                        "content": user_message,
                     }
                 ]
             },

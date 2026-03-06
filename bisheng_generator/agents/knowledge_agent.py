@@ -12,13 +12,38 @@ import logging
 from typing import List, Dict, Any, Optional
 import httpx
 from langchain_core.language_models import BaseChatModel
-from langchain_core.embeddings import Embeddings
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from models.intent import EnhancedIntent
 from core.utils import extract_json
+from core.prompt_loader import get_prompt_loader
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_MATCH_SYSTEM = "你是一个专业的知识库匹配专家。根据用户需求，从可用知识库列表中选择最合适的知识库。"
+
+_DEFAULT_MATCH_HUMAN = """
+请根据用户需求，从可用知识库列表中选择最合适的知识库。
+
+用户需求：{rewritten_input}
+工作流类型：{workflow_type}
+
+可用知识库列表：
+{knowledge_catalog}
+
+匹配原则：
+1. 语义匹配：选择与用户需求最相关的知识库
+2. 领域匹配：优先选择同一领域的知识库（如政策、法律、科技等）
+3. 权威性优先：优先选择官方、权威的知识库
+4. 政策类查询：如果有多个政策相关知识库，可以都选中
+
+请分析并返回：
+- matched_knowledge_bases: 匹配的知识库列表（返回 id）
+- retrieval_config: 检索配置（可选）
+- reasoning: 匹配理由（50 字以内）
+
+以 JSON 格式返回。
+""".strip()
 
 # 毕昇知识库列表接口分页大小
 KNOWLEDGE_PAGE_SIZE = 20
@@ -63,45 +88,24 @@ class KnowledgeMatch(BaseModel):
 class KnowledgeAgent:
     """知识库匹配专家"""
 
-    def __init__(self, llm: BaseChatModel, embedding: Embeddings):
+    def __init__(
+        self,
+        llm: BaseChatModel,
+        prompts_dir: Optional[str] = None,
+    ):
         self.llm = llm
-        self.embedding = embedding
 
         # 知识库清单：由 load_knowledge_catalog() 在项目启动时从毕昇接口异步加载
         self.knowledge_catalog: List[KnowledgeBaseDefinition] = []
 
-        # 知识库匹配提示词
+        loader = get_prompt_loader(prompts_dir)
+        match_system = loader.load("knowledge/match_system.md") or _DEFAULT_MATCH_SYSTEM
+        match_human = loader.load("knowledge/match_human.md") or _DEFAULT_MATCH_HUMAN
+
         self.match_prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    "你是一个专业的知识库匹配专家。根据用户需求，从可用知识库列表中选择最合适的知识库。",
-                ),
-                (
-                    "human",
-                    """
-请根据用户需求，从可用知识库列表中选择最合适的知识库。
-
-用户需求：{rewritten_input}
-工作流类型：{workflow_type}
-
-可用知识库列表：
-{knowledge_catalog}
-
-匹配原则：
-1. 语义匹配：选择与用户需求最相关的知识库
-2. 领域匹配：优先选择同一领域的知识库（如政策、法律、科技等）
-3. 权威性优先：优先选择官方、权威的知识库
-4. 政策类查询：如果有多个政策相关知识库，可以都选中
-
-请分析并返回：
-- matched_knowledge_bases: 匹配的知识库列表（返回 id）
-- retrieval_config: 检索配置（可选）
-- reasoning: 匹配理由（50 字以内）
-
-以 JSON 格式返回。
-""",
-                ),
+                ("system", match_system),
+                ("human", match_human),
             ]
         )
 
@@ -315,25 +319,3 @@ class KnowledgeAgent:
             if kb.id == kb_id:
                 return kb
         return None
-
-    # ========== 预留 embedding 匹配接口 ==========
-    # TODO: 后续实现基于向量相似度的知识库匹配
-    async def match_knowledge_by_embedding(
-        self, query: str, top_k: int = 2
-    ) -> List[KnowledgeBaseDefinition]:
-        """
-        使用 embedding 进行语义匹配
-
-        Args:
-            query: 查询文本
-            top_k: 返回最相关的 K 个知识库
-
-        Returns:
-            匹配的知识库列表
-        """
-        # TODO: 实现逻辑
-        # 1. 生成 query 的 embedding
-        # query_embedding = self.embedding.embed_query(query)
-        # 2. 计算与每个知识库描述的相似度
-        # 3. 返回 Top-K 最相似的知识库
-        pass

@@ -438,13 +438,13 @@ description: 专业的毕昇 (BiSheng) 工作流 JSON 文件生成器，根据�
       {
         "name": "工具参数",
         "params": [
-          {"key": "query", "test": "var", "type": "var_textarea", "label": "true", "value": "{{#input_1efc6.user_input#}}", "required": true, "placeholder": "true"}
+          {"key": "query", "test": "input", "type": "var_textarea", "label": "query", "value": "{{#input_1efc6.user_input#}}", "required": true}
         ]
       },
       {
         "name": "输出",
         "params": [
-          {"key": "output", "type": "var", "label": "true", "global": "key"}
+          {"key": "output", "type": "var", "label": "输出变量", "value": "", "global": "key"}
         ]
       }
     ]

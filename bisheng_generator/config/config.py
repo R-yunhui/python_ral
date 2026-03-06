@@ -1,7 +1,7 @@
 """配置管理模块"""
 
 from pydantic import BaseModel, Field
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import os
 from dotenv import load_dotenv
 
@@ -30,12 +30,23 @@ class Config(BaseModel):
     )
     llm_temperature: float = Field(default=0.7, ge=0, le=2)
 
-    # Embedding 配置
-    embedding_model: str = Field(
-        default_factory=lambda: os.getenv("EMBEDDING_MODEL", "text-embedding-v3"),
-        description="Embedding 模型",
+    # 思考模式（仅对意图识别、工作流生成节点生效，0 表示不限制）
+    thinking_budget_intent: int = Field(
+        default_factory=lambda: int(os.getenv("THINKING_BUDGET_INTENT", "50")),
+        ge=0,
+        description="意图识别节点思考 token 上限，0 表示不限制，默认 50",
     )
-    embedding_dimension: int = Field(default=1536, description="Embedding 维度")
+    thinking_budget_workflow: int = Field(
+        default_factory=lambda: int(os.getenv("THINKING_BUDGET_WORKFLOW", "100")),
+        ge=0,
+        description="工作流生成节点思考 token 上限，0 表示不限制，默认 100",
+    )
+
+    # 提示词目录（为空则使用默认 bisheng_generator/prompts）
+    prompts_dir: Optional[str] = Field(
+        default_factory=lambda: os.getenv("PROMPTS_DIR", ""),
+        description="提示词 .md/.txt 根目录，为空则使用包内默认",
+    )
 
     # 工具配置
     bocha_search_api_key: str = Field(
@@ -110,7 +121,6 @@ class Config(BaseModel):
             "api_key": self.llm_api_key,
             "base_url": self.llm_base_url,
             "temperature": self.llm_temperature,
-            "embedding_model": self.embedding_model,
             "bisheng_url": self.bisheng_base_url,
             "bocha_search_api_key": self.bocha_search_api_key,
         }
