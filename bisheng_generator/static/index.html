@@ -27,8 +27,8 @@
                 <span>Token</span>
                 <span class="status-dot" id="tokenDot"></span>
             </button>
-            <button type="button" id="toggleHistoryBtn" class="tb-btn">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <button type="button" id="toggleSidebarBtn" class="tb-btn tb-btn-sidebar" aria-label="切换侧边栏">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
                 <span>历史</span>
             </button>
             <div class="tb-divider"></div>
@@ -39,8 +39,8 @@
         </div>
     </nav>
 
-    <!-- ===== Token 面板 ===== -->
-    <div id="tokenPanel" class="panel" style="display:none">
+    <!-- ===== Token 面板（浮层） ===== -->
+    <div id="tokenPanel" class="panel panel-overlay" style="display:none">
         <div class="panel-body">
             <div class="panel-head">
                 <h4>Access Token</h4>
@@ -55,22 +55,25 @@
         </div>
     </div>
 
-    <!-- ===== 历史面板 ===== -->
-    <div id="historyPanel" class="panel" style="display:none">
-        <div class="panel-body">
-            <div class="panel-head">
-                <h4>历史工作流</h4>
-                <div style="display:flex;gap:8px;align-items:center">
+    <!-- ===== 主体：左侧边栏 + 对话区 ===== -->
+    <div class="app-body">
+        <!-- ===== 左侧：历史会话 ===== -->
+        <aside id="sidebar" class="sidebar">
+            <div class="sidebar-head">
+                <h4 id="historyPanelTitle">历史会话</h4>
+                <div class="sidebar-actions">
+                    <button type="button" id="historyBackBtn" class="link" style="display:none">← 返回</button>
                     <button type="button" id="refreshHistoryBtn" class="link">刷新</button>
-                    <button type="button" class="panel-close" onclick="this.closest('.panel').style.display='none'">&times;</button>
                 </div>
             </div>
             <div id="historyList" class="hist-list"></div>
-        </div>
-    </div>
+            <div id="sessionDetail" class="session-detail" style="display:none">
+                <div id="sessionTimeline" class="session-timeline"></div>
+            </div>
+        </aside>
 
-    <!-- ===== 对话区 ===== -->
-    <main class="conversation">
+        <!-- ===== 右侧：对话区 ===== -->
+        <main class="conversation">
         <div id="chatMessages" class="messages">
             <div class="welcome" id="welcomeBlock">
                 <div class="w-icon">
@@ -94,7 +97,8 @@
                 </div>
             </div>
         </div>
-    </main>
+        </main>
+    </div>
 
     <!-- ===== 错误浮层 ===== -->
     <div id="error" class="err-float" style="display:none"></div>
@@ -129,6 +133,6 @@
 
 </div>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>

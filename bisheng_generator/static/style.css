@@ -40,6 +40,7 @@
   --sh-4: 0 16px 48px rgba(0,0,0,.10);
 
   --topbar-h: 52px;
+  --sidebar-w: 260px;
 }
 
 /* ── Reset ───────────────────────────────────────────────── */
@@ -48,6 +49,30 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
 
 /* ── App shell ───────────────────────────────────────────── */
 #app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+.app-body{display:flex;flex:1;min-height:0;overflow:hidden}
+
+/* ── Sidebar（左侧历史）──────────────────────────────────── */
+.sidebar{
+  width:var(--sidebar-w);flex-shrink:0;
+  display:flex;flex-direction:column;
+  background:var(--bg-card);
+  border-right:1px solid var(--border-l);
+  overflow:hidden;
+}
+.sidebar-head{
+  flex-shrink:0;
+  padding:12px 14px;
+  border-bottom:1px solid var(--border-l);
+  display:flex;justify-content:space-between;align-items:center;gap:8px;
+}
+.sidebar-head h4{font-family:var(--f-d);font-weight:700;font-size:14px;margin:0}
+.sidebar-actions{display:flex;gap:6px;align-items:center}
+.hist-list{flex:1;min-height:0}
+.session-detail{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.session-timeline{flex:1;overflow-y:auto}
+
+.conversation{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
 
 /* ── Topbar ──────────────────────────────────────────────── */
 .topbar{
@@ -83,16 +108,18 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
 .status-dot{width:6px;height:6px;border-radius:50%;background:var(--red);flex-shrink:0}
 .status-dot.ok{background:var(--green)}
 
-/* ── Dropdown Panels ─────────────────────────────────────── */
-.panel{
-  position:fixed;top:var(--topbar-h);left:0;right:0;z-index:90;
+/* ── Overlay Panels（Token 等）────────────────────────────── */
+.panel-overlay{
+  position:fixed;top:var(--topbar-h);left:50%;transform:translateX(-50%);
+  width:calc(100% - 32px);max-width:440px;z-index:90;
   background:var(--bg-card);
-  border-bottom:1px solid var(--border);
+  border:1px solid var(--border);
+  border-radius:var(--r);
   box-shadow:var(--sh-3);
   animation:panelIn .18s ease;
 }
-@keyframes panelIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
-.panel-body{max-width:640px;margin:0 auto;padding:20px 24px}
+@keyframes panelIn{from{opacity:0;transform:translate(-50%,-6px)}to{opacity:1;transform:translate(-50%,0)}}
+.panel-body{padding:20px 24px}
 .panel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
 .panel-head h4{font-family:var(--f-d);font-weight:700;font-size:15px}
 .panel-close{background:none;border:none;font-size:20px;color:var(--c-sub);cursor:pointer;padding:0 4px;line-height:1}
@@ -127,7 +154,7 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
 .btn-sm{padding:5px 11px;font-size:12px}
 
 /* ── History ─────────────────────────────────────────────── */
-.hist-list{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow-y:auto}
+.hist-list{display:flex;flex-direction:column;gap:4px;padding:8px;overflow-y:auto}
 .hist-item{
   display:flex;justify-content:space-between;align-items:center;
   padding:10px 12px;border-radius:var(--r-s);
@@ -138,9 +165,34 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
 .hist-name{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hist-meta{font-size:11px;color:var(--c-sub);margin-top:2px}
 .hist-right{display:flex;gap:4px;flex-shrink:0;margin-left:10px}
+.hist-empty,.hist-hint,.hist-loading,.hist-error{
+  text-align:center;padding:16px;font-size:13px;color:var(--c-sub);
+}
+.hist-hint{font-size:12px;padding-top:0}
+.hist-error{color:var(--red)}
 
-/* ── Conversation ────────────────────────────────────────── */
-.conversation{flex:1;overflow:hidden}
+/* 会话详情时间线 */
+.session-timeline{display:flex;flex-direction:column;gap:8px;padding:8px}
+.tl-item{margin:0}
+.tl-item.tl-msg .bubble{max-width:100%;padding:10px 14px;font-size:14px}
+.tl-event{
+  background:var(--bg);border:1px solid var(--border-l);
+  border-radius:var(--r-s);padding:10px 12px;font-size:13px;
+}
+.tl-ev-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:4px}
+.tl-ev-type{font-weight:600;color:var(--accent);text-transform:capitalize}
+.tl-ev-agent{color:var(--c-sub);font-size:12px}
+.tl-ev-progress,.tl-ev-dur{font-family:var(--f-m);font-size:12px;color:var(--c-muted)}
+.tl-ev-msg{color:var(--c-text);line-height:1.45}
+.tl-ev-detail{margin-top:4px;font-size:12px;color:var(--c-sub);word-break:break-all}
+.tl-ev-error{margin-top:4px;font-size:12px;color:var(--red)}
+
+/* 主区历史回放中的步骤行 */
+.msg .bubble.tl-ev-inline{font-size:13px;color:var(--c-sub)}
+.msg .bubble.tl-ev-inline .tl-ev-type{font-weight:600;color:var(--accent)}
+.msg .bubble.tl-ev-inline .tl-ev-agent{color:var(--c-muted)}
+
+/* ── Conversation（主对话区）──────────────────────────────── */
 .messages{
   height:100%;overflow-y:auto;
   padding:20px 24px 140px;
@@ -344,16 +396,17 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
   display:flex;gap:8px;padding:12px 18px;flex-wrap:wrap;
   background:var(--bg);
 }
-.res-actions .btn{gap:6px}
-.res-actions .btn svg{opacity:.6}
-.res-actions .btn:hover svg{opacity:1}
+.res-actions .btn,.res-actions a.btn{gap:6px;text-decoration:none}
+.res-actions .btn svg,.res-actions a.btn svg{opacity:.6}
+.res-actions .btn:hover svg,.res-actions a.btn:hover svg{opacity:1}
 
 /* error */
 .msg-error .bubble{border-color:var(--red);background:var(--red-bg);color:var(--red)}
 
 /* ── Composer ────────────────────────────────────────────── */
+/* 输入区仅占主内容区（排除左侧边栏），在主内容区内居中 */
 .composer{
-  position:fixed;bottom:0;left:0;right:0;z-index:80;
+  position:fixed;bottom:0;left:var(--sidebar-w);right:0;z-index:80;
   padding:0 24px 18px;
   background:linear-gradient(0deg,var(--bg) 70%,transparent);
   pointer-events:none;
@@ -473,6 +526,25 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
 .messages::-webkit-scrollbar-thumb,.hist-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
 #jsonContent::-webkit-scrollbar{width:4px}
 #jsonContent::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:4px}
+
+/* ── 侧边栏小屏折叠 ──────────────────────────────────────── */
+@media(max-width:768px){
+  .sidebar{
+    position:fixed;left:0;top:var(--topbar-h);bottom:0;z-index:85;
+    width:280px;max-width:85vw;
+    box-shadow:var(--sh-4);
+    transform:translateX(-100%);transition:transform .22s ease;
+  }
+  .sidebar.open{transform:translateX(0)}
+  .sidebar-head{padding:14px 16px}
+  .app-body .conversation{margin-left:0}
+  /* 小屏下侧栏收起，输入区占满宽度 */
+  .composer{left:0}
+}
+.tb-btn-sidebar{display:none}
+@media(max-width:768px){
+  .tb-btn-sidebar{display:inline-flex}
+}
 
 /* ── Responsive ──────────────────────────────────────────── */
 @media(max-width:640px){

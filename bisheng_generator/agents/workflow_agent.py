@@ -305,6 +305,13 @@ class WorkflowAgent:
             elif pt == "var_textarea_file" and isinstance(v, dict):
                 v.setdefault("msg", "")
                 v.setdefault("files", [])
+            elif pt == "var_textarea":
+                # 毕昇工具节点（如联网搜索）执行时期望 query 等为字符串，非 str 会导致 expected string or bytes-like object
+                if isinstance(v, dict):
+                    raw = v.get("msg") or v.get("value") or ""
+                    p["value"] = raw if isinstance(raw, str) else (str(raw) if raw is not None else "")
+                elif not isinstance(v, str):
+                    p["value"] = str(v) if v is not None else ""
             return
 
         pt = p.get("type", "")

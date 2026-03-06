@@ -1,0 +1,2 @@
+# Placeholder for resource 'workflow_template' required by agentskills when loading bisheng-workflow-generator.
+# Workflow generation is performed by WorkflowAgent via LLM + SKILL.md and examples.

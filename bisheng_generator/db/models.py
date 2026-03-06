@@ -21,3 +21,16 @@ class WorkflowGenerationRecord(Base):
     status = Column(String(32), nullable=False, default="success", comment="success / needs_clarification / error")
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SessionTimeline(Base):
+    """会话时间线表：按 session 存储对话消息与推送的进度事件，便于查看历史"""
+
+    __tablename__ = "session_timeline"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(128), nullable=False, index=True, comment="会话 ID")
+    item_type = Column(String(32), nullable=False, comment="message | progress_event")
+    sort_key = Column(DateTime, nullable=False, comment="发生时间，用于排序")
+    payload = Column(JSON, nullable=False, comment="message: {role,content}; progress_event: 完整事件")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

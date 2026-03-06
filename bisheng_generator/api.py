@@ -40,11 +40,15 @@ import asyncio
 
 from config.config import config
 from core.graph import WorkflowOrchestrator
-from core.bisheng_client import create_workflow_from_json
 from core.workflow_io import save_workflow
 from models.progress import ProgressEvent, ProgressEventType, AgentName
-
-
+from services.bisheng_import_service import do_import_workflow
+from services.session_timeline_service import (
+    save_timeline_message,
+    save_timeline_progress_event,
+    list_sessions as list_sessions_svc,
+    get_session_timeline as get_session_timeline_svc,
+)
 # 配置日志 - 使用 UTF-8 编码的 StreamHandler
 class UTF8StreamHandler(logging.StreamHandler):
     """自定义 StreamHandler，确保使用 UTF-8 编码"""
@@ -173,72 +177,27 @@ def _get_access_token(request: Request) -> str:
     return request.cookies.get("access_token_cookie") or ""
 
 
-def _import_name_with_timestamp(
-    workflow: dict,
-    explicit_name: str | None = None,
-    metadata: dict | None = None,
-) -> str:
-    """生成导入用名称（带时间戳）。优先：显式名称 > workflow.name > metadata.intent.rewritten_input > 默认。"""
-    base = explicit_name or workflow.get("name")
-    if not base and metadata and isinstance(metadata, dict):
-        intent = metadata.get("intent")
-        if isinstance(intent, dict) and intent.get("rewritten_input"):
-            base = (intent["rewritten_input"] or "")[:50]
-    base = base or "导入的工作流"
-    return f"{base}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+# ========== 会话历史（时间线）API ==========
 
 
-async def _do_import_workflow(
-    workflow: dict,
-    base_url: str,
-    token: str,
-    *,
-    explicit_name: str | None = None,
-    metadata: dict | None = None,
-    publish: bool = True,
-) -> dict:
-    """统一执行导入：计算名称（带时间戳）并调用毕昇导入。返回导入结果，失败抛异常。"""
-    name = _import_name_with_timestamp(
-        workflow, explicit_name=explicit_name, metadata=metadata
-    )
-    logger.info("导入工作流名称：%s", name)
-    return await _import_workflow_to_bisheng(
-        base_url=base_url,
-        token=token,
-        workflow=workflow,
-        name=name,
-        publish=publish,
-    )
-
-
-async def _import_workflow_to_bisheng(
-    base_url: str,
-    token: str,
-    workflow: dict,
-    name: str | None = None,
-    description: str = "",
-    publish: bool = True,
-) -> dict:
+@app.get("/api/sessions")
+async def get_sessions(limit: int = 100):
     """
-    将工作流 JSON 导入到毕昇平台（异步封装，避免阻塞）。
-    Token 由前端配置或请求 Cookie access_token_cookie 提供。
+    获取会话列表，按最后活动时间倒序。
+    仅当 MySQL 已配置时返回数据，否则返回空列表。
     """
-    if not token:
-        raise ValueError("无法导入：请在前端登录或携带 Cookie access_token_cookie")
-    name = name or workflow.get("name") or "导入的工作流"
-    description = description or workflow.get("description") or ""
+    sessions = list_sessions_svc(config, limit=limit)
+    return sessions
 
-    def _do_import() -> dict:
-        return create_workflow_from_json(
-            base_url=base_url,
-            token=token,
-            flow_data=workflow,
-            name=name,
-            description=description,
-            publish=publish,
-        )
 
-    return await asyncio.to_thread(_do_import)
+@app.get("/api/sessions/{session_id}")
+async def get_session_detail(session_id: str, limit: int = 500):
+    """
+    获取某会话的完整时间线（对话消息 + 推送的进度事件）。
+    仅当 MySQL 已配置时返回数据，否则返回空列表。
+    """
+    timeline = get_session_timeline_svc(config, session_id, limit=limit)
+    return {"session_id": session_id, "timeline": timeline}
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
@@ -314,7 +273,7 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
             auto_import = (request.config or {}).get("auto_import", False)
             if auto_import and workflow:
                 try:
-                    import_result = await _do_import_workflow(
+                    import_result = await do_import_workflow(
                         workflow,
                         config.bisheng_base_url,
                         token,
@@ -465,7 +424,7 @@ async def import_workflow_to_bisheng(
             status_code=400, detail="工作流格式无效：需包含 nodes 和 edges"
         )
     try:
-        result = await _do_import_workflow(
+        result = await do_import_workflow(
             workflow,
             config.bisheng_base_url,
             token,
@@ -540,6 +499,13 @@ async def generate_workflow_stream(
         is_resume,
     )
 
+    # 写入当前轮用户消息到会话时间线（仅当 MySQL 已配置时）
+    if config.is_mysql_configured():
+        try:
+            save_timeline_message(config, session_id, "user", user_query)
+        except Exception as e:
+            logger.warning("写入会话用户消息失败（不影响生成）: %s", e)
+
     event_queue: Queue = Queue()
 
     async def progress_callback(event: ProgressEvent):
@@ -548,6 +514,13 @@ async def generate_workflow_stream(
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
             start_event = ProgressEvent.create_start_event(user_query)
+            if config.is_mysql_configured():
+                try:
+                    save_timeline_progress_event(
+                        config, session_id, start_event.model_dump(mode="json")
+                    )
+                except Exception as e:
+                    logger.warning("写入会话进度事件失败: %s", e)
             yield f"data: {json.dumps(start_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.1)
 
@@ -578,6 +551,13 @@ async def generate_workflow_stream(
                 while not event_queue.empty():
                     try:
                         event = event_queue.get_nowait()
+                        if config.is_mysql_configured():
+                            try:
+                                save_timeline_progress_event(
+                                    config, session_id, event.model_dump(mode="json")
+                                )
+                            except Exception as e:
+                                logger.warning("写入会话进度事件失败: %s", e)
                         yield f"data: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                     except asyncio.QueueEmpty:
                         break
@@ -595,6 +575,15 @@ async def generate_workflow_stream(
                                 data=result,
                                 progress=100.0,
                             )
+                            if config.is_mysql_configured():
+                                try:
+                                    save_timeline_progress_event(
+                                        config,
+                                        session_id,
+                                        final_event.model_dump(mode="json"),
+                                    )
+                                except Exception as e:
+                                    logger.warning("写入会话进度事件失败: %s", e)
                             yield f"data: {json.dumps(final_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                     except Exception as e:
                         logger.exception("获取任务结果失败：%s", e)
@@ -602,6 +591,13 @@ async def generate_workflow_stream(
 
                 try:
                     event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                    if config.is_mysql_configured():
+                        try:
+                            save_timeline_progress_event(
+                                config, session_id, event.model_dump(mode="json")
+                            )
+                        except Exception as e:
+                            logger.warning("写入会话进度事件失败: %s", e)
                     yield f"data: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                 except asyncio.TimeoutError:
                     continue
@@ -620,6 +616,13 @@ async def generate_workflow_stream(
                 error=str(e),
                 progress=0.0,
             )
+            if config.is_mysql_configured():
+                try:
+                    save_timeline_progress_event(
+                        config, session_id, error_event.model_dump(mode="json")
+                    )
+                except Exception as save_err:
+                    logger.warning("写入会话进度事件失败: %s", save_err)
             yield f"data: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
 
     response = StreamingResponse(
@@ -714,7 +717,7 @@ async def run_generation(
                 )
                 start_ts = time.time()
                 try:
-                    import_result = await _do_import_workflow(
+                    import_result = await do_import_workflow(
                         workflow,
                         base_url,
                         access_token or "",
@@ -730,6 +733,8 @@ async def run_generation(
                                 "flow_id": import_result.get("flow_id"),
                                 "version_id": import_result.get("version_id"),
                                 "published": import_result.get("published"),
+                                "chat_url": import_result.get("chat_url"),
+                                "flow_edit_url": import_result.get("flow_edit_url"),
                             },
                             duration_ms,
                         )

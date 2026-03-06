@@ -23,6 +23,10 @@ from agents.knowledge_agent import KnowledgeAgent, KnowledgeMatch
 from agents.workflow_agent import WorkflowAgent
 from models.progress import ProgressEvent
 from services.workflow_record_service import save_workflow_record
+from core.intent_history import (
+    add_intent_assistant_message_from_pending,
+    add_intent_user_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -260,8 +264,11 @@ class WorkflowOrchestrator:
         if "configurable" not in graph_config:
             graph_config["configurable"] = {"thread_id": session_id}
 
-        # 续轮时必须把首轮 user_input 写回 state，否则节点重跑会读不到
-        update = {"user_input": (original_user_input or "").strip() or resume_value}
+        # 续轮时传入当前用户回复与 session_id，意图节点从意图历史存储加载多轮对话后一次理解（方案 B）
+        update = {
+            "user_input": (resume_value or "").strip(),
+            "session_id": session_id,
+        }
 
         try:
             result = await self.graph.ainvoke(
@@ -285,6 +292,14 @@ class WorkflowOrchestrator:
                 else interrupts[0]
             )
             logger.info("检测到 __interrupt__，需要澄清, pending=%s", pending)
+            if session_id and isinstance(pending, dict):
+                try:
+                    add_intent_user_message(
+                        session_id, (result.get("user_input") or "").strip()
+                    )
+                    add_intent_assistant_message_from_pending(session_id, pending)
+                except Exception as e:
+                    logger.warning("写入意图历史失败: %s", e)
             save_workflow_record(
                 self.config,
                 result,
@@ -398,11 +413,7 @@ class WorkflowOrchestrator:
             )
             logger.info("流式生成暂停（需要澄清），session_id=%s", session_id)
         elif status == "success":
-            await self._emit_progress(
-                ProgressEvent.create_complete_event(
-                    result.get("workflow", {}), result.get("metadata", {})
-                )
-            )
+            # 不在此处发送 complete：由 api 层在 task 完成后统一发送一次带完整 result 的 final_event，避免前端收到两次 complete 出现重复结果卡
             logger.info("流式生成完成，status=success")
         else:
             await self._emit_progress(

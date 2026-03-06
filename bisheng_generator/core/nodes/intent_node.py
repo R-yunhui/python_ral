@@ -22,6 +22,7 @@ async def understand_with_retry(
     state: WorkflowState,
     start_time: float,
     chat_history: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
 ) -> Optional[EnhancedIntent]:
     """带重试与降级的 understand 调用，返回 None 表示已写入 state error/降级。"""
     last_error: Optional[Exception] = None
@@ -29,7 +30,7 @@ async def understand_with_retry(
     for attempt in range(cfg.max_retries_intent + 1):
         try:
             intent = await ctx.user_agent.understand(
-                user_input, chat_history=chat_history
+                user_input, chat_history=chat_history, session_id=session_id
             )
             if intent.rewritten_input:
                 return intent
@@ -97,7 +98,10 @@ async def run_intent_understanding(
         ProgressEvent.create_agent_start_event(AgentName.INTENT_UNDERSTANDING)
     )
 
-    intent = await understand_with_retry(ctx, user_input, state, start_time)
+    session_id = state.get("session_id")
+    intent = await understand_with_retry(
+        ctx, user_input, state, start_time, session_id=session_id
+    )
     if intent is None:
         return state
 
@@ -125,7 +129,12 @@ async def run_intent_understanding(
             },
         ]
         merged = await understand_with_retry(
-            ctx, str(user_reply), state, start_time, chat_history=chat_history
+            ctx,
+            str(user_reply),
+            state,
+            start_time,
+            chat_history=chat_history,
+            session_id=session_id,
         )
         if merged is None:
             return state

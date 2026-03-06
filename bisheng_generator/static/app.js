@@ -16,10 +16,14 @@ const tokenDot          = $('tokenDot');
 const bishengTokenInput = $('bishengTokenInput');
 const saveTokenBtn      = $('saveTokenBtn');
 const tokenHint         = $('tokenHint');
-const toggleHistoryBtn  = $('toggleHistoryBtn');
-const historyPanel      = $('historyPanel');
+const toggleSidebarBtn  = $('toggleSidebarBtn');
+const sidebar           = $('sidebar');
 const historyList       = $('historyList');
 const refreshHistoryBtn = $('refreshHistoryBtn');
+const historyBackBtn    = $('historyBackBtn');
+const historyPanelTitle = $('historyPanelTitle');
+const sessionDetail     = $('sessionDetail');
+const sessionTimeline   = $('sessionTimeline');
 const progressSection   = $('progressSection');
 const progressLogs      = $('progressLogs');
 const errorBar          = $('error');
@@ -90,17 +94,19 @@ function bind() {
     if (toggleTokenBtn) toggleTokenBtn.addEventListener('click', () => {
         const on = tokenPanel.style.display === 'none';
         tokenPanel.style.display = on ? 'block' : 'none';
-        if (on && historyPanel) historyPanel.style.display = 'none';
     });
-    if (toggleHistoryBtn) toggleHistoryBtn.addEventListener('click', () => {
-        const on = historyPanel.style.display === 'none';
-        historyPanel.style.display = on ? 'block' : 'none';
-        if (on && tokenPanel) tokenPanel.style.display = 'none';
+    if (toggleSidebarBtn && sidebar) toggleSidebarBtn.addEventListener('click', () => {
+        sidebar.classList.toggle('open');
+        if (sidebar.classList.contains('open')) {
+            showHistoryList();
+            loadHistory();
+        }
     });
 
     if (saveTokenBtn)      saveTokenBtn.addEventListener('click', saveToken);
     if (newSessionBtn)     newSessionBtn.addEventListener('click', newSession);
-    if (refreshHistoryBtn) refreshHistoryBtn.addEventListener('click', loadHistory);
+    if (refreshHistoryBtn) refreshHistoryBtn.addEventListener('click', () => { showHistoryList(); loadHistory(); });
+    if (historyBackBtn) historyBackBtn.addEventListener('click', showHistoryList);
     if (modalImportBtn)    modalImportBtn.addEventListener('click', doImport);
     if (modalDownloadBtn)  modalDownloadBtn.addEventListener('click', doDownload);
     if (modalCopyBtn)      modalCopyBtn.addEventListener('click', doCopy);
@@ -140,7 +146,6 @@ function setLoading(on) {
 }
 function closePanels() {
     if (tokenPanel) tokenPanel.style.display = 'none';
-    if (historyPanel) historyPanel.style.display = 'none';
 }
 
 // ==================== SSE ====================
@@ -183,6 +188,7 @@ function stream(query, sid, resume, originalQuery) {
                             workflow: payload.workflow,
                             metadata: payload.metadata || {},
                             file_path: payload.file_path,
+                            import_result: payload.import_result || null,
                         };
                         updateProg('生成完成');
                         finishProc('done');
@@ -380,6 +386,15 @@ function updateProg(txt) {
     scroll();
 }
 
+function addAssistantMessage(content) {
+    if (!content) return;
+    const el = document.createElement('div');
+    el.className = 'msg msg-ast';
+    el.innerHTML = '<div class="bubble">' + esc(content) + '</div>';
+    chatMessages.appendChild(el);
+    scroll();
+}
+
 function addClarify(p) {
     const msg = p.message || '请补充以下信息';
     const qs = p.questions || [];
@@ -408,8 +423,13 @@ function addResult(data) {
     h += '<div class="res-meta-item"><span class="res-meta-label">知识库</span><span class="res-meta-val">' + kbCount + ' 个</span></div>';
     h += '</div>';
 
+    const ir = data.import_result || {};
+    const hasChat = ir.chat_url;
+    const hasEdit = ir.flow_edit_url;
     h += '<div class="res-actions">';
     h += '<button class="btn btn-primary btn-sm _imp"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>导入到毕昇</button>';
+    if (hasChat) h += '<a class="btn btn-sm _chat" href="' + esc(ir.chat_url) + '" target="_blank" rel="noopener">打开对话</a>';
+    if (hasEdit) h += '<a class="btn btn-sm _edit" href="' + esc(ir.flow_edit_url) + '" target="_blank" rel="noopener">编辑工作流</a>';
     h += '<button class="btn btn-sm _dl"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>下载</button>';
     h += '<button class="btn btn-sm _cp"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>复制</button>';
     h += '<button class="btn btn-sm _json"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>查看 JSON</button>';
@@ -498,7 +518,28 @@ async function doImport() {
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) { const det = d.detail || d.message || '导入失败'; showErr(typeof det === 'string' ? det : JSON.stringify(det)); return; }
+        const ir = d.import_result || {};
         toast(d.message || '已导入到毕昇');
+        if (ir.chat_url || ir.flow_edit_url) {
+            const actions = document.querySelector('.msg-result-card:last-child .res-actions');
+            if (actions && !actions.querySelector('._chat')) {
+                const imp = actions.querySelector('._imp');
+                const ref = imp ? imp.nextSibling : actions.firstChild;
+                if (ir.chat_url) {
+                    const a = document.createElement('a');
+                    a.className = 'btn btn-sm _chat'; a.href = ir.chat_url; a.target = '_blank'; a.rel = 'noopener';
+                    a.textContent = '打开对话';
+                    actions.insertBefore(a, ref);
+                }
+                if (ir.flow_edit_url) {
+                    const a = document.createElement('a');
+                    a.className = 'btn btn-sm _edit'; a.href = ir.flow_edit_url; a.target = '_blank'; a.rel = 'noopener';
+                    a.textContent = '编辑工作流';
+                    const after = actions.querySelector('._chat') || actions.querySelector('._imp');
+                    actions.insertBefore(a, after ? after.nextSibling : actions.firstChild);
+                }
+            }
+        }
     } catch(e) { showErr('导入失败：' + e.message); }
 }
 function doDownload() {
@@ -515,25 +556,156 @@ async function doCopy() {
     catch(_) { showErr('复制失败'); }
 }
 
-// ==================== History ====================
+// ==================== History (会话列表 + 主区展示) ====================
+function showHistoryList() {
+    if (sessionDetail) sessionDetail.style.display = 'none';
+    if (historyList) historyList.style.display = 'block';
+    if (historyBackBtn) historyBackBtn.style.display = 'none';
+    if (historyPanelTitle) historyPanelTitle.textContent = '历史会话';
+}
+
+function showSessionDetail() {
+    if (historyList) historyList.style.display = 'none';
+    if (sessionDetail) sessionDetail.style.display = 'block';
+    if (historyBackBtn) historyBackBtn.style.display = 'inline-block';
+    if (historyPanelTitle) historyPanelTitle.textContent = '会话详情';
+}
+
+/** 将时间线重放到主对话框，含完整结果卡片（导入/打开对话/编辑工作流） */
+function renderTimelineIntoMainArea(timeline) {
+    if (!chatMessages) return;
+    chatMessages.innerHTML = '';
+    if (!timeline.length) return;
+
+    let lastCompleteData = null;
+    for (const item of timeline) {
+        const payload = item.payload || {};
+        if (item.item_type === 'message') {
+            const role = payload.role || 'user';
+            const content = payload.content || '';
+            if (role === 'user') addUser(content);
+            else addAssistantMessage(content);
+            continue;
+        }
+        if (item.item_type === 'progress_event') {
+            const ev = payload;
+            const eventType = ev.event_type || '';
+            if (eventType === 'needs_clarification' && ev.data && ev.data.pending_clarification) {
+                addClarify(ev.data.pending_clarification);
+            } else if (eventType === 'complete' && ev.data && ev.data.workflow) {
+                lastCompleteData = ev.data;
+                addResult(ev.data);
+            } else if (eventType === 'error' && ev.error) {
+                addError(ev.error);
+            } else if (eventType && eventType !== 'start' && eventType !== 'complete') {
+                const el = document.createElement('div');
+                el.className = 'msg msg-ast';
+                el.innerHTML = '<div class="bubble tl-ev-inline">' +
+                    '<span class="tl-ev-type">' + esc(eventType) + '</span>' +
+                    (ev.agent_name ? ' <span class="tl-ev-agent">' + esc(ev.agent_name) + '</span>' : '') +
+                    (ev.message ? ' — ' + esc(ev.message) : '') + '</div>';
+                chatMessages.appendChild(el);
+            }
+        }
+    }
+    if (lastCompleteData) {
+        currentWorkflow = lastCompleteData.workflow;
+        currentFilename = lastCompleteData.file_path ? lastCompleteData.file_path.split(/[\\/]/).pop() : null;
+        if (currentWorkflow && jsonContent) jsonContent.textContent = JSON.stringify(currentWorkflow, null, 2);
+    }
+    scroll();
+}
+
 async function loadHistory() {
     if (!historyList) return;
+    showHistoryList();
     try {
-        const r = await fetch('/api/workflows');
+        const r = await fetch('/api/sessions');
         if (!r.ok) throw new Error('加载失败');
         const list = await r.json();
-        if (!list.length) { historyList.innerHTML = '<p style="color:var(--c-sub);text-align:center;padding:20px;font-size:13px">暂无记录</p>'; return; }
-        historyList.innerHTML = list.map(w => {
-            const d = new Date(w.created_at * 1000).toLocaleString('zh-CN');
-            const sz = w.size_bytes >= 1024 ? (w.size_bytes / 1024).toFixed(1) + ' KB' : w.size_bytes + ' B';
-            return '<div class="hist-item"><div class="hist-left"><div class="hist-name">' + esc(w.filename) + '</div>' +
-                '<div class="hist-meta">' + d + ' · ' + sz + '</div></div>' +
+        if (!list.length) {
+            historyList.innerHTML = '<p class="hist-empty">暂无会话记录</p><p class="hist-hint">配置 MySQL 并生成工作流后，会话将在此展示</p>';
+            return;
+        }
+        historyList.innerHTML = list.map(s => {
+            const lastAt = s.last_at ? new Date(s.last_at).toLocaleString('zh-CN') : '';
+            const preview = (s.preview || s.session_id || '').slice(0, 60);
+            return '<div class="hist-item hist-session" data-session-id="' + esc(s.session_id) + '">' +
+                '<div class="hist-left">' +
+                '<div class="hist-name">' + esc(preview) + (preview.length >= 60 ? '…' : '') + '</div>' +
+                '<div class="hist-meta">' + esc(lastAt) + '</div>' +
+                '</div>' +
                 '<div class="hist-right">' +
-                '<button class="btn btn-sm" onclick="event.stopPropagation();viewWf(\'' + w.filename + '\')">查看</button>' +
-                '<button class="btn btn-sm" onclick="event.stopPropagation();dlWf(\'' + w.filename + '\')">下载</button>' +
+                '<button type="button" class="btn btn-sm btn-view-session">查看</button>' +
                 '</div></div>';
         }).join('');
-    } catch(e) { historyList.innerHTML = '<p style="color:var(--red);text-align:center;padding:20px;font-size:13px">' + e.message + '</p>'; }
+        historyList.querySelectorAll('.hist-session').forEach(item => {
+            const sessionId = item.dataset.sessionId;
+            if (!sessionId) return;
+            const go = () => { loadSessionDetail(sessionId); };
+            item.querySelector('.btn-view-session')?.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); go(); });
+            item.addEventListener('click', e => { if (!e.target.closest('.btn-view-session')) go(); });
+        });
+    } catch (e) {
+        historyList.innerHTML = '<p class="hist-error">' + esc(e.message) + '</p>';
+    }
+}
+
+async function loadSessionDetail(sessionId) {
+    try {
+        const r = await fetch('/api/sessions/' + encodeURIComponent(sessionId));
+        if (!r.ok) throw new Error('加载失败');
+        const data = await r.json();
+        const timeline = data.timeline || [];
+        if (!timeline.length) {
+            toast('该会话暂无记录', 'err');
+            return;
+        }
+        currentSessionId = sessionId;
+        appState = 'completed';
+        hideErr();
+        renderTimelineIntoMainArea(timeline);
+        showHistoryList();
+        if (sidebar) sidebar.classList.remove('open');
+    } catch (e) {
+        toast('加载失败：' + e.message, 'err');
+    }
+}
+
+function renderTimelineItem(item) {
+    const payload = item.payload || {};
+    if (item.item_type === 'message') {
+        const role = payload.role || 'user';
+        const content = payload.content || '';
+        const cls = role === 'user' ? 'msg msg-user' : 'msg msg-ast';
+        return '<div class="tl-item tl-msg ' + cls + '"><div class="bubble">' + esc(content) + '</div></div>';
+    }
+    if (item.item_type === 'progress_event') {
+        const ev = payload;
+        const eventType = ev.event_type || '';
+        const msg = ev.message || '';
+        const agentName = ev.agent_name || '';
+        const progress = ev.progress != null ? Math.round(ev.progress) + '%' : '';
+        const duration = ev.duration_ms != null ? (ev.duration_ms / 1000).toFixed(1) + 's' : '';
+        const err = ev.error ? '<div class="tl-ev-error">' + esc(ev.error) + '</div>' : '';
+        let dataHtml = '';
+        if (ev.data && typeof ev.data === 'object') {
+            if (ev.data.workflow) dataHtml = '<span class="tl-ev-data">含工作流结果</span>';
+            else if (ev.data.pending_clarification) dataHtml = '<span class="tl-ev-data">需澄清</span>';
+            else if (Object.keys(ev.data).length) dataHtml = '<span class="tl-ev-data">' + esc(JSON.stringify(ev.data).slice(0, 80)) + '</span>';
+        }
+        return '<div class="tl-item tl-event" data-type="' + esc(eventType) + '">' +
+            '<div class="tl-ev-head">' +
+            '<span class="tl-ev-type">' + esc(eventType) + '</span>' +
+            (agentName ? '<span class="tl-ev-agent">' + esc(agentName) + '</span>' : '') +
+            (progress ? '<span class="tl-ev-progress">' + progress + '</span>' : '') +
+            (duration ? '<span class="tl-ev-dur">' + duration + '</span>' : '') +
+            '</div>' +
+            '<div class="tl-ev-msg">' + esc(msg) + '</div>' +
+            (dataHtml ? '<div class="tl-ev-detail">' + dataHtml + '</div>' : '') +
+            err + '</div>';
+    }
+    return '';
 }
 async function viewWf(fn) {
     try {

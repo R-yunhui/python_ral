@@ -16,6 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from models.intent import EnhancedIntent
 from core.utils import extract_json
 from core.prompt_loader import get_prompt_loader
+from core.intent_history import get_intent_session_history
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ _DEFAULT_SYSTEM_PROMPT = """
 - 当用户输入**过短**（如不足 15 字）或**明显模糊**（如仅「做个助手」「帮我做一个」），**必须**设 needs_clarification=true，并输出 1~3 个 clarification_questions。
   - 问题示例：「您希望助手主要实现什么功能？（如：查天气、查政策、客服问答等）」
 - 若已提供 chat_history（多轮上下文），则本轮应基于历史与当前回复**合并为一条最终需求**，设 needs_clarification=false，**不再追问**。
+- 若用户输入中包含 **「【用户补充】」**（即首轮需求+用户补充的合并内容），表示用户已回答过澄清问题，**必须**设 needs_clarification=false，将首轮与补充内容合并为一条完整、可执行的 rewritten_input，**不再追问**。
 
 【核心判断原则】
 
@@ -159,26 +161,39 @@ class UserAgent:
         self,
         user_input: str,
         chat_history: Optional[List[Dict[str, str]]] = None,
+        session_id: Optional[str] = None,
     ) -> EnhancedIntent:
         """
         理解用户意图
 
         Args:
             user_input: 用户输入
-            chat_history: 多轮对话历史，格式 [{"role": "user"|"assistant", "content": "..."}]
+            chat_history: 多轮对话历史，格式 [{"role": "user"|"assistant", "content": "..."}]（可选，与 session_id 二选一）
+            session_id: 会话 ID；提供时从意图历史存储加载 chat_history（方案 B），优先于 chat_history 参数
 
         Returns:
             EnhancedIntent: 结构化的意图描述
         """
         logger.info("意图理解开始，user_input=%s", (user_input or "")[:80])
 
-        if chat_history:
+        messages: Optional[List] = None
+        if session_id:
+            hist = get_intent_session_history(session_id)
+            try:
+                msgs = await hist.aget_messages()
+            except Exception:
+                msgs = getattr(hist, "messages", []) or []
+            if msgs:
+                messages = list(msgs)
+        if messages is None and chat_history:
             messages = []
             for m in chat_history:
-                if m["role"] == "user":
-                    messages.append(HumanMessage(content=m["content"]))
+                if m.get("role") == "user":
+                    messages.append(HumanMessage(content=m.get("content", "")))
                 else:
-                    messages.append(AIMessage(content=m["content"]))
+                    messages.append(AIMessage(content=m.get("content", "")))
+
+        if messages:
             chain = self.prompt_with_history | self.llm
             response = await chain.ainvoke({
                 "chat_history": messages,
@@ -206,8 +221,12 @@ class UserAgent:
             multi_turn=result.get("multi_turn", True),
         )
 
-        # 有 chat_history 时强制不再澄清
-        if chat_history:
+        # 有 chat_history（含从 session_id 加载的历史）时强制不再澄清
+        if messages:
+            intent.needs_clarification = False
+            intent.clarification_questions = []
+        # 续轮合并输入（含「【用户补充】」）视为已澄清，不再追问（兼容未用历史时的合并逻辑）
+        if "【用户补充】" in (user_input or ""):
             intent.needs_clarification = False
             intent.clarification_questions = []
 
