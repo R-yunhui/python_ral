@@ -39,6 +39,7 @@ from contextlib import asynccontextmanager
 import asyncio
 
 from config.config import config
+from config.logging_config import setup_logging
 from core.graph import WorkflowOrchestrator
 from core.workflow_io import save_workflow
 from models.progress import ProgressEvent, ProgressEventType, AgentName
@@ -49,48 +50,13 @@ from services.session_timeline_service import (
     list_sessions as list_sessions_svc,
     get_session_timeline as get_session_timeline_svc,
 )
-# 配置日志 - 使用 UTF-8 编码的 StreamHandler
-class UTF8StreamHandler(logging.StreamHandler):
-    """自定义 StreamHandler，确保使用 UTF-8 编码"""
 
-    def __init__(self, stream=None):
-        super().__init__(stream)
-        # 设置编码器为 UTF-8
-        self.setFormatter(
-            logging.Formatter(
-                "%(asctime)s - %(name)s - [%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-
-    def emit(self, record):
-        """重写 emit 方法，确保使用 UTF-8 编码输出"""
-        try:
-            msg = self.format(record)
-            stream = self.stream
-            # 确保使用 UTF-8 编码
-            if isinstance(stream, io.TextIOWrapper):
-                stream.write(msg + self.terminator)
-            else:
-                # 如果流不是 TextIOWrapper，尝试直接写入
-                stream.write(msg + self.terminator)
-            self.flush()
-        except Exception:
-            self.handleError(record)
-
-
-# 配置根日志记录器
-root_logger = logging.getLogger()
-root_logger.setLevel(getattr(logging, config.log_level))
-
-# 移除所有已有的 handler
-for handler in root_logger.handlers[:]:
-    root_logger.removeHandler(handler)
-
-# 添加我们的 UTF-8 handler
-utf8_handler = UTF8StreamHandler(sys.stdout)
-root_logger.addHandler(utf8_handler)
-
+# 日志在独立模块配置，避免 api 内堆积
+setup_logging(
+    log_level=config.log_level,
+    log_dir=getattr(config, "log_dir", None) or "",
+    repo_root=Path(__file__).resolve().parent.parent,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -234,23 +200,22 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
 
     try:
         orchestrator = WorkflowOrchestrator(request.config)
-        if not is_resume:
-            await orchestrator.knowledge_agent.load_knowledge_catalog(
-                base_url=config.bisheng_base_url,
-                access_token=token,
-            )
-
+        # 知识库在知识库匹配节点内惰性加载，此处不再预加载
         if is_resume:
             result = await orchestrator.generate_resume(
                 resume_value=request.query,
                 session_id=session_id,
                 config=graph_config,
+                bisheng_base_url=config.bisheng_base_url,
+                access_token=token,
             )
         else:
             result = await orchestrator.generate(
                 user_input=request.query,
                 session_id=session_id,
                 config=graph_config,
+                bisheng_base_url=config.bisheng_base_url,
+                access_token=token,
             )
 
         # 需要澄清 → 直接返回，不保存/导入
@@ -684,12 +649,7 @@ async def run_generation(
         orchestrator = WorkflowOrchestrator(
             config_obj=request_config, progress_callback=progress_callback
         )
-        if not is_resume:
-            await orchestrator.knowledge_agent.load_knowledge_catalog(
-                base_url=base_url,
-                access_token=access_token or "",
-            )
-
+        # 知识库在知识库匹配节点内惰性加载，此处不再预加载
         result = await orchestrator.generate_with_progress(
             user_input=query,
             progress_callback=progress_callback,
@@ -697,6 +657,8 @@ async def run_generation(
             graph_config=graph_config,
             is_resume=is_resume,
             original_user_input=original_user_input,
+            bisheng_base_url=base_url,
+            access_token=access_token or "",
         )
 
         # 澄清时不保存/导入

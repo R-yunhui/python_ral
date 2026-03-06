@@ -45,6 +45,18 @@ async def run_knowledge_matching(
         )
         return {"knowledge_match": knowledge_match}
 
+    # 惰性加载：到匹配节点且需要知识库时再加载 catalog，避免首轮/续轮都预加载
+    agent = ctx.knowledge_agent
+    if not agent.knowledge_catalog:
+        base_url = (state.get("bisheng_base_url") or "").strip()
+        if base_url:
+            await agent.load_knowledge_catalog(
+                base_url=base_url,
+                access_token=state.get("access_token") or "",
+            )
+        else:
+            logger.warning("知识库匹配需要加载 catalog 但 state 无 bisheng_base_url，跳过加载")
+
     last_error: Optional[Exception] = None
     for attempt in range(cfg.max_retries_knowledge + 1):
         try:

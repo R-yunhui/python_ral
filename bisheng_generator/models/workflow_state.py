@@ -18,3 +18,6 @@ class WorkflowState(TypedDict):
     error: Optional[str]
     warnings: NotRequired[Optional[List[str]]]
     session_id: NotRequired[Optional[str]]
+    # 知识库惰性加载：匹配节点需要时从 state 取 base_url/token 再加载
+    bisheng_base_url: NotRequired[Optional[str]]
+    access_token: NotRequired[Optional[str]]

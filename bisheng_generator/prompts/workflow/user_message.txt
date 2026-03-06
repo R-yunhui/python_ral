@@ -1,1 +1,1 @@
-请根据提供的上下文信息，生成一个完整的毕昇工作流。用户需求：{intent_rewritten_input}
+请根据提供的上下文信息，**创建一个毕昇(Bisheng)的工作流**，输出完整且符合规范的毕昇工作流 JSON。用户需求：{intent_rewritten_input}

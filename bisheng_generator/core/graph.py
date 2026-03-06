@@ -202,6 +202,9 @@ class WorkflowOrchestrator:
         user_input: str,
         session_id: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        *,
+        bisheng_base_url: Optional[str] = None,
+        access_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         生成工作流（首轮）
@@ -210,6 +213,8 @@ class WorkflowOrchestrator:
             user_input: 用户输入
             session_id: 会话 ID（用于 checkpointer thread_id）
             config: LangGraph config（含 configurable.thread_id）
+            bisheng_base_url: 毕昇 API 地址，供知识库匹配节点惰性加载 catalog
+            access_token: 毕昇鉴权 token
 
         Returns:
             生成结果（可能含 needs_clarification）
@@ -224,6 +229,8 @@ class WorkflowOrchestrator:
             workflow=None,
             error=None,
             session_id=session_id,
+            bisheng_base_url=bisheng_base_url or self.config.bisheng_base_url,
+            access_token=access_token or "",
         )
 
         graph_config = config or {}
@@ -243,6 +250,9 @@ class WorkflowOrchestrator:
         session_id: str,
         config: Optional[Dict[str, Any]] = None,
         original_user_input: Optional[str] = None,
+        *,
+        bisheng_base_url: Optional[str] = None,
+        access_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         续轮：恢复被 interrupt 暂停的图
@@ -252,6 +262,8 @@ class WorkflowOrchestrator:
             session_id: 会话 ID（与首轮同一个）
             config: LangGraph config
             original_user_input: 首轮用户输入（续轮时须传入以恢复 state，否则可能 KeyError）
+            bisheng_base_url: 毕昇 API 地址，供知识库匹配节点惰性加载 catalog
+            access_token: 毕昇鉴权 token
 
         Returns:
             生成结果
@@ -264,11 +276,15 @@ class WorkflowOrchestrator:
         if "configurable" not in graph_config:
             graph_config["configurable"] = {"thread_id": session_id}
 
-        # 续轮时传入当前用户回复与 session_id，意图节点从意图历史存储加载多轮对话后一次理解（方案 B）
-        update = {
+        # 续轮时传入当前用户回复与 session_id，以及毕昇地址/token 供知识库匹配节点惰性加载
+        update: Dict[str, Any] = {
             "user_input": (resume_value or "").strip(),
             "session_id": session_id,
         }
+        if bisheng_base_url is not None:
+            update["bisheng_base_url"] = bisheng_base_url
+        if access_token is not None:
+            update["access_token"] = access_token
 
         try:
             result = await self.graph.ainvoke(
@@ -366,6 +382,9 @@ class WorkflowOrchestrator:
         graph_config: Optional[Dict[str, Any]] = None,
         is_resume: bool = False,
         original_user_input: Optional[str] = None,
+        *,
+        bisheng_base_url: Optional[str] = None,
+        access_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         生成工作流并实时推送进度（流式版本）
@@ -377,6 +396,8 @@ class WorkflowOrchestrator:
             graph_config: LangGraph config
             is_resume: 是否为续轮
             original_user_input: 首轮用户输入（续轮时必传，用于恢复 state）
+            bisheng_base_url: 毕昇 API 地址，供知识库匹配节点惰性加载
+            access_token: 毕昇鉴权 token
 
         Returns:
             生成的工作流
@@ -396,10 +417,16 @@ class WorkflowOrchestrator:
                 session_id,
                 config=graph_config,
                 original_user_input=original_user_input,
+                bisheng_base_url=bisheng_base_url,
+                access_token=access_token,
             )
         else:
             result = await self.generate(
-                user_input, session_id=session_id, config=graph_config
+                user_input,
+                session_id=session_id,
+                config=graph_config,
+                bisheng_base_url=bisheng_base_url,
+                access_token=access_token,
             )
 
         status = result.get("status")

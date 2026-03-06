@@ -1,22 +1,24 @@
 """
 工作流生成 Agent
 
-使用 agentskills-langchain 加载 bisheng-workflow-generator skill，
-结合上下文信息（工具、知识库、用户需求）生成毕昇工作流。
+使用 deepagent 加载 bisheng-workflow-generator skill（SKILL.md），
+结合上下文信息（工具、知识库、用户需求）生成毕昇工作流；
+提供 validate_workflow 工具供 agent 自检与迭代，提升生成质量。
 """
 
 import logging
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 from langchain_core.language_models import BaseChatModel
-from langchain.agents import create_agent
-from agentskills_core import SkillRegistry
-from agentskills_fs import LocalFileSystemSkillProvider
-from agentskills_langchain import get_tools, get_tools_usage_instructions
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.callbacks import UsageMetadataCallbackHandler
+
+from deepagents import create_deep_agent
+from deepagents.backends.filesystem import FilesystemBackend
 
 from models.intent import EnhancedIntent
 from agents.tool_agent import ToolPlan
@@ -26,9 +28,161 @@ from core.prompt_loader import get_prompt_loader
 
 logger = logging.getLogger(__name__)
 
+# 项目根目录（bisheng_generator 的上级），用于 deepagent skills 路径
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+# 两处 skills：ral/skills（含 bisheng-workflow-generator）、ral/.cursor/skills
+_SKILLS_DIR = _REPO_ROOT / "skills"
+_CURSOR_SKILLS_DIR = _REPO_ROOT / ".cursor" / "skills"
+_BISHENG_SKILL_DIR = _SKILLS_DIR / "bisheng-workflow-generator"
+
+
+def _resolve_skills_paths() -> Tuple[str, List[str]]:
+    """
+    解析 backend root_dir 与 skills 虚拟路径列表。
+    root_dir 使用 resolve() 得到绝对路径；
+    skills 只包含实际存在的目录，避免加载失败导致重试。
+    """
+    root = str(_REPO_ROOT.resolve())
+    paths = []
+    if _SKILLS_DIR.exists():
+        paths.append("/skills/")
+    else:
+        logger.warning("skills 目录不存在，将不加载 ral/skills：%s", _SKILLS_DIR)
+    if _CURSOR_SKILLS_DIR.exists():
+        paths.append("/.cursor/skills/")
+    else:
+        logger.debug(".cursor/skills 不存在，跳过：%s", _CURSOR_SKILLS_DIR)
+    if not paths:
+        logger.warning("未找到任何 skills 目录（已检查 skills 与 .cursor/skills），工作流生成可能失败")
+    return root, paths
+
+
+def _log_skills_match_status(root_dir: str, skills_paths: List[str]) -> None:
+    """打印 skills 目录与 bisheng-workflow-generator 的匹配情况，便于排查加载失败。"""
+    skills_ok = _SKILLS_DIR.exists()
+    bisheng_skill_ok = _BISHENG_SKILL_DIR.exists() and (_BISHENG_SKILL_DIR / "SKILL.md").exists()
+    logger.info(
+        "skills 匹配情况: root_dir=%s, 传入 paths=%s, /skills/ 目录存在=%s, "
+        "bisheng-workflow-generator(SKILL.md) 存在=%s",
+        root_dir,
+        skills_paths,
+        skills_ok,
+        bisheng_skill_ok,
+    )
+    if not bisheng_skill_ok and skills_ok:
+        logger.warning(
+            "bisheng-workflow-generator 未找到，请确认存在 %s",
+            _BISHENG_SKILL_DIR / "SKILL.md",
+        )
+
+
+def _get_last_assistant_content(messages: List[Any]) -> str:
+    """从 agent 返回的 messages 中取最后一条带 content 的 assistant 消息。"""
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if hasattr(msg, "type") and msg.type == "ai":
+            text = getattr(msg, "content", None)
+            if isinstance(text, str) and text.strip():
+                return text
+        if isinstance(msg, dict):
+            if msg.get("type") == "ai" or msg.get("role") == "assistant":
+                text = msg.get("content", "")
+                if isinstance(text, str) and text.strip():
+                    return text
+    return ""
+
+
+def _validate_workflow_impl(
+    workflow: Dict[str, Any], tool_plan: Optional[ToolPlan] = None
+) -> List[str]:
+    """
+    程序化校验毕昇工作流 JSON，返回问题列表（空表示通过）。
+    用于 validate_workflow 工具及后续可选的后处理校验。
+    """
+    issues: List[str] = []
+    nodes = workflow.get("nodes") or []
+    edges = workflow.get("edges") or []
+    node_ids = {n.get("id") for n in nodes if n.get("id")}
+
+    # 1. edges 引用的 node 必须存在
+    for e in edges:
+        src, tgt = e.get("source"), e.get("target")
+        if src and src not in node_ids:
+            issues.append(f"边引用了不存在的节点 source: {src}")
+        if tgt and tgt not in node_ids:
+            issues.append(f"边引用了不存在的节点 target: {tgt}")
+
+    # 2. 必须有 start、input、output 等基础节点
+    types_seen = {n.get("data", {}).get("type") for n in nodes}
+    for required in ("start", "input", "output"):
+        if required not in types_seen:
+            issues.append(f"缺少必需节点类型: {required}")
+
+    valid_tool_keys: set = set()
+    if tool_plan and tool_plan.selected_tools:
+        valid_tool_keys = {t.tool_key for t in tool_plan.selected_tools}
+
+    # 3. 每个 tool 节点：tool_key 必须在候选内；输出必须被某 LLM 引用
+    tool_node_ids = []
+    for node in nodes:
+        data = node.get("data", {})
+        if data.get("type") != "tool":
+            continue
+        nid = node.get("id", "")
+        tool_node_ids.append(nid)
+        tk = data.get("tool_key", "")
+        if valid_tool_keys and tk and tk not in valid_tool_keys:
+            issues.append(
+                f"工具节点 {nid} 的 tool_key '{tk}' 不在候选列表中，"
+                "必须与候选工具的 tool_key 完全一致（含 MCP 后缀）"
+            )
+
+    # 4. 每个 tool 节点的输出应被至少一个 LLM 节点引用（禁止死分支）
+    llm_refs = set()
+    for node in nodes:
+        data = node.get("data", {})
+        if data.get("type") != "llm":
+            continue
+        for grp in data.get("group_params", []):
+            for p in grp.get("params", []):
+                val = p.get("value")
+                if not isinstance(val, str):
+                    continue
+                # 匹配 {{#tool_xxx.output#}} 或 #tool_xxx.output#
+                for m in re.finditer(r"#(tool_[a-zA-Z0-9_]+)\.output#", val):
+                    llm_refs.add(m.group(1))
+    for tid in tool_node_ids:
+        if tid and tid not in llm_refs:
+            issues.append(
+                f"工具节点 {tid} 的输出未被任何 LLM 节点引用（禁止死分支），"
+                "请在至少一个 LLM 节点的输入中使用 {{#" + tid + ".output#}}"
+            )
+
+    return issues
+
+
+def _make_validate_workflow_tool(tool_plan: Optional[ToolPlan]) -> Any:
+    """构造 validate_workflow 工具（闭包 tool_plan），供 deepagent 自检与迭代。"""
+
+    @tool
+    def validate_workflow(workflow_json_str: str) -> str:
+        """验证毕昇工作流 JSON 是否符合规范。
+        输入为 JSON 字符串（可含 ```json 代码块）。
+        返回问题列表，每行一条；若无问题返回 OK。
+        请根据返回的问题修正 JSON 后再次调用，直到返回 OK 或已迭代多次。"""
+        w = extract_json(workflow_json_str)
+        if not w:
+            return "无法解析为合法 JSON，请确保输入是有效的毕昇工作流 JSON（可用 ```json 代码块包裹）。"
+        issues = _validate_workflow_impl(w, tool_plan)
+        if not issues:
+            return "OK"
+        return "\n".join(issues)
+
+    return validate_workflow
+
 
 class WorkflowAgent:
-    """工作流生成专家"""
+    """工作流生成专家（基于 deepagent + skills，支持 validate_workflow 自检迭代）"""
 
     def __init__(
         self,
@@ -37,38 +191,7 @@ class WorkflowAgent:
     ):
         self.llm = llm
         self._prompts_dir = prompts_dir
-        self._tools: Optional[List] = None
         self._usage_callback = UsageMetadataCallbackHandler()
-
-    async def _get_tools(self) -> List:
-        """懒加载工具"""
-        if self._tools is None:
-            self._tools = await self._load_skill()
-        return self._tools
-
-    async def _load_skill(self) -> List:
-        """
-        加载 bisheng-workflow-generator skill
-
-        Returns:
-            LangChain tools 列表
-        """
-        logger.info("加载 bisheng-workflow-generator skill")
-        # 设置 skills 根路径（Provider 会在根目录下查找 skill 子目录）
-        skills_root = Path(__file__).parent.parent.parent / "skills"
-
-        # 创建 Provider 和 Registry
-        provider = LocalFileSystemSkillProvider(skills_root)
-        registry = SkillRegistry()
-
-        # 注册 skill (异步调用)
-        await registry.register("bisheng-workflow-generator", provider)
-
-        # 生成 LangChain 工具
-        tools = get_tools(registry)
-        logger.info(f"skill 加载完成，获取到 {len(tools)} 个工具")
-
-        return tools
 
     async def generate_workflow(
         self,
@@ -90,98 +213,72 @@ class WorkflowAgent:
         tools_info = self._format_tools_info(tool_plan)
         knowledge_info = self._format_knowledge_info(knowledge_match)
 
-        catalog = await self._get_skills_catalog()
-        instructions = get_tools_usage_instructions()
-
         user_analysis = f"""需求描述：{intent.rewritten_input}
-工作流类型：{intent.get_workflow_type()}
-复杂度：{intent.complexity_hint}
-是否需要工具：{intent.needs_tool}
-是否需要知识库：{intent.needs_knowledge}
-是否多轮对话：{intent.multi_turn}"""
+            工作流类型：{intent.get_workflow_type()}
+            复杂度：{intent.complexity_hint}
+            是否需要工具：{intent.needs_tool}
+            是否需要知识库：{intent.needs_knowledge}
+            是否多轮对话：{intent.multi_turn}
+        """
 
         loader = get_prompt_loader(self._prompts_dir)
         system_tpl = loader.load("workflow/system.md")
-        if system_tpl:
-            system_prompt = system_tpl.format(
-                catalog=catalog,
-                instructions=instructions,
-                user_analysis=user_analysis,
-                tools_info=tools_info,
-                knowledge_info=knowledge_info,
-            )
-        else:
-            system_prompt = f"""你是一个专业的毕昇工作流生成专家，可以使用以下技能和数据完成毕升工作流的创建：
-
-{catalog}
-
-{instructions}
-
-【用户需求分析】
-{user_analysis}
-
-【候选资源（按需选用，不必全部使用）】
-
-候选工具（来自语义检索的候选集，请根据用户需求选择性使用，与需求不直接相关的请忽略）：
-{tools_info}
-
-候选知识库（请仅在需求涉及对应领域的文档检索时使用，不相关的请忽略）：
-{knowledge_info}
-
-【工作流设计原则】
-1. 保守优先：用户没有明确要求的能力，不要添加。若需求为简单、单一场景，工作流应精简
-2. 工具按需选用：只有当用户需求明确需要某个工具的功能时，才创建对应的 Tool 节点。候选列表中与需求不直接相关的工具请直接忽略
-3. 知识库按需选用：只有当需求涉及特定领域的文档检索时，才创建 Knowledge Retriever 节点
-4. 禁止死分支：每个 Tool 节点的输出必须被下游 LLM 节点通过 {{{{#tool_xxx.output#}}}} 引用，不允许创建无出边或输出未被消费的孤立节点
-5. 复杂度控制：simple 约 3-5 个节点，moderate 约 5-8 个节点，full 可包含条件分支等复杂逻辑
-
-【输出要求】
-- 你必须始终以 JSON 格式返回最终结果
-- JSON 必须使用 ```json 代码块包裹
-- 确保 JSON 格式正确，可以被 json.loads() 解析
-"""
+        system_prompt = system_tpl.format(
+            user_analysis=user_analysis,
+            tools_info=tools_info,
+            knowledge_info=knowledge_info,
+        )
 
         user_msg_tpl = loader.load("workflow/user_message.txt")
         user_message = (
             user_msg_tpl.format(intent_rewritten_input=intent.rewritten_input)
-            if user_msg_tpl
-            else f"请根据提供的上下文信息，生成一个完整的毕昇工作流。用户需求：{intent.rewritten_input}"
         )
 
-        agent = create_agent(
+        validate_tool = _make_validate_workflow_tool(tool_plan)
+        root_dir, skills_paths = _resolve_skills_paths()
+        _log_skills_match_status(root_dir, skills_paths)
+        logger.info(
+            "调用 deepagent 生成工作流 JSON，root_dir=%s, skills=%s",
+            root_dir,
+            skills_paths,
+        )
+        backend = FilesystemBackend(root_dir=root_dir, virtual_mode=True)
+        agent = create_deep_agent(
             model=self.llm,
-            tools=await self._get_tools(),
             system_prompt=system_prompt,
+            tools=[validate_tool],
+            backend=backend,
+            skills=skills_paths,
             debug=False,
         )
 
-        logger.info("调用 LLM 生成工作流 JSON")
         result = await agent.ainvoke(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": user_message,
-                    }
-                ]
-            },
-            config=RunnableConfig(callbacks=[self._usage_callback]),
+            input={"messages": [HumanMessage(content=user_message)]},
+            config=RunnableConfig(
+                callbacks=[self._usage_callback],
+            ),
         )
-        import os
 
-        usage_metadata = self._usage_callback.usage_metadata.get(
-            os.getenv("QWEN_CHAT_MODEL")
+        model_key = getattr(self.llm, "model_name", None) or getattr(
+            self.llm, "model", None
         )
-        if usage_metadata:
-            logger.info(
-                "LLM 调用完成，tokens: in=%s out=%s total=%s",
-                usage_metadata.get("input_tokens"),
-                usage_metadata.get("output_tokens"),
-                usage_metadata.get("total_tokens"),
-            )
+        if model_key:
+            usage_metadata = self._usage_callback.usage_metadata.get(model_key)
+            if usage_metadata:
+                logger.info(
+                    "LLM 调用完成，tokens: in=%s out=%s total=%s",
+                    usage_metadata.get("input_tokens"),
+                    usage_metadata.get("output_tokens"),
+                    usage_metadata.get("total_tokens"),
+                )
 
-        # 提取 JSON
-        content = result["messages"][-1].content
+        # 取最后一条带 content 的 assistant 消息（可能中间有 tool 调用）
+        content = _get_last_assistant_content(result.get("messages") or [])
+
+        if not content:
+            logger.warning("deepagent 未返回有效文本内容")
+            return {"error": "工作流生成失败", "content": ""}
+
         workflow_json = extract_json(content)
 
         if not workflow_json:
@@ -309,7 +406,11 @@ class WorkflowAgent:
                 # 毕昇工具节点（如联网搜索）执行时期望 query 等为字符串，非 str 会导致 expected string or bytes-like object
                 if isinstance(v, dict):
                     raw = v.get("msg") or v.get("value") or ""
-                    p["value"] = raw if isinstance(raw, str) else (str(raw) if raw is not None else "")
+                    p["value"] = (
+                        raw
+                        if isinstance(raw, str)
+                        else (str(raw) if raw is not None else "")
+                    )
                 elif not isinstance(v, str):
                     p["value"] = str(v) if v is not None else ""
             return
@@ -465,7 +566,9 @@ class WorkflowAgent:
                     name = p.get("name", "")
                     desc = p.get("description", "")
                     required = "必填" if p.get("required") else "选填"
-                    params_info.append(f"{name}({required}): {desc}" if desc else f"{name}({required})")
+                    params_info.append(
+                        f"{name}({required}): {desc}" if desc else f"{name}({required})"
+                    )
                 lines.append(f"  参数：{params_info}")
 
         return "\n".join(lines)
@@ -495,15 +598,3 @@ class WorkflowAgent:
                     lines.append(f"  collection: {collection}")
 
         return "\n".join(lines)
-
-    async def _get_skills_catalog(self) -> str:
-        """获取 skills 目录"""
-        try:
-            skills_path = Path(__file__).parent.parent.parent / "skills"
-            provider = LocalFileSystemSkillProvider(skills_path)
-            registry = SkillRegistry()
-            await registry.register("bisheng-workflow-generator", provider)
-            return await registry.get_skills_catalog(format="xml")
-        except Exception as e:
-            logger.exception(f"获取 skills 目录失败：{e}")
-            return f"获取 skills 目录失败：{e}"

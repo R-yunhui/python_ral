@@ -58,6 +58,10 @@ class Config(BaseModel):
     log_level: str = Field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"), description="日志级别"
     )
+    log_dir: Optional[str] = Field(
+        default_factory=lambda: os.getenv("LOG_DIR", "log"),
+        description="日志文件目录（相对项目根或绝对路径），为空则仅输出到控制台",
+    )
 
     # 容错重试配置（各节点最多重试次数，总调用次数 = 1 + 重试次数）
     max_retries_intent: int = Field(
