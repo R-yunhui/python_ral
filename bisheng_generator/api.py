@@ -40,8 +40,8 @@ import asyncio
 
 from config.config import config
 from core.graph import WorkflowOrchestrator
-from core.bisheng_workflow_import_client import create_workflow_from_json
-from main import save_workflow
+from core.bisheng_client import create_workflow_from_json
+from core.workflow_io import save_workflow
 from models.progress import ProgressEvent, ProgressEventType, AgentName
 
 
@@ -92,7 +92,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    """FastAPI 生命周期。知识库改为按请求从 Cookie token 加载，不再启动时预加载。"""
+    """FastAPI 生命周期：MySQL 已配置时自动创建表。"""
+    if config.is_mysql_configured():
+        from db.database import init_db
+        init_db(config)
     yield
 
 

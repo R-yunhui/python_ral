@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from langgraph.types import interrupt
 
-from core.state import WorkflowState
+from models.workflow_state import WorkflowState
 from core.nodes.context import NodeContext
 from core.utils import is_retryable
 from models.intent import EnhancedIntent

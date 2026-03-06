@@ -104,6 +104,34 @@ class Config(BaseModel):
     service_host: str = Field(default="0.0.0.0", description="服务监听地址")
     service_port: int = Field(default=8000, description="服务端口")
 
+    # MySQL：工作流生成记录持久化（配置后生效，未配置则不落库；表自动创建）
+    mysql_host: str = Field(
+        default_factory=lambda: os.getenv("MYSQL_HOST", ""),
+        description="MySQL 主机",
+    )
+    mysql_port: int = Field(
+        default_factory=lambda: int(os.getenv("MYSQL_PORT", "3306")),
+        description="MySQL 端口",
+    )
+    mysql_user: str = Field(
+        default_factory=lambda: os.getenv("MYSQL_USER", ""),
+        description="MySQL 用户名",
+    )
+    mysql_password: str = Field(
+        default_factory=lambda: os.getenv("MYSQL_PASSWORD", ""),
+        description="MySQL 密码",
+    )
+    mysql_database: str = Field(
+        default_factory=lambda: os.getenv("MYSQL_DATABASE", ""),
+        description="MySQL 数据库名",
+    )
+
+    def is_mysql_configured(self) -> bool:
+        """是否已配置 MySQL（用于决定是否落库与自动建表）"""
+        return bool(
+            self.mysql_host and self.mysql_user and self.mysql_database
+        )
+
     class Config:
         env_prefix = ""
         extra = "ignore"

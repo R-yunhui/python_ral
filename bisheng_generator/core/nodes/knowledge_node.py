@@ -4,7 +4,7 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
-from core.state import WorkflowState
+from models.workflow_state import WorkflowState
 from core.nodes.context import NodeContext
 from core.utils import is_retryable
 from agents.knowledge_agent import KnowledgeMatch

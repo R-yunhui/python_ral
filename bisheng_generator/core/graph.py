@@ -8,8 +8,8 @@ from langgraph.types import Command
 from langgraph.checkpoint.memory import InMemorySaver
 
 from config.config import Config, config
-from core.state import WorkflowState
-from core.model_factory import ModelInitializer, create_llm
+from models.workflow_state import WorkflowState
+from infrastructure.model_factory import ModelInitializer, create_llm
 from core.nodes import (
     NodeContext,
     run_intent_understanding,
@@ -22,6 +22,7 @@ from agents.tool_agent import ToolAgent, ToolPlan
 from agents.knowledge_agent import KnowledgeAgent, KnowledgeMatch
 from agents.workflow_agent import WorkflowAgent
 from models.progress import ProgressEvent
+from services.workflow_record_service import save_workflow_record
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +275,7 @@ class WorkflowOrchestrator:
     def _process_result(
         self, result: Dict[str, Any], session_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """统一处理 ainvoke 返回值（含 __interrupt__ 检测）"""
+        """统一处理 ainvoke 返回值（含 __interrupt__ 检测），并落库记录"""
         # 检测 interrupt（需要澄清）
         interrupts = result.get("__interrupt__")
         if interrupts:
@@ -284,6 +285,13 @@ class WorkflowOrchestrator:
                 else interrupts[0]
             )
             logger.info("检测到 __interrupt__，需要澄清, pending=%s", pending)
+            save_workflow_record(
+                self.config,
+                result,
+                session_id,
+                status="needs_clarification",
+                error_message=None,
+            )
             return {
                 "status": "success",
                 "needs_clarification": True,
@@ -293,6 +301,13 @@ class WorkflowOrchestrator:
             }
 
         if result.get("error"):
+            save_workflow_record(
+                self.config,
+                result,
+                session_id,
+                status="error",
+                error_message=result["error"],
+            )
             return {"status": "error", "message": result["error"]}
 
         tool_plan = result.get("tool_plan") or ToolPlan()
@@ -313,6 +328,13 @@ class WorkflowOrchestrator:
         if result.get("warnings"):
             metadata["warnings"] = result["warnings"]
 
+        save_workflow_record(
+            self.config,
+            result,
+            session_id,
+            status="success",
+            error_message=None,
+        )
         return {
             "status": "success",
             "message": "工作流生成成功",
