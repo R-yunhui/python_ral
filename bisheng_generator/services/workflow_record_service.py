@@ -106,25 +106,3 @@ def save_workflow_record(
         logger.exception("写入工作流生成记录失败: %s", e)
     finally:
         session.close()
-
-
-class WorkflowRecordService:
-    """可注入的服务类（若后续需要从 FastAPI 依赖注入）"""
-
-    def __init__(self, config: Config):
-        self.config = config
-
-    def save(
-        self,
-        raw_state: Dict[str, Any],
-        session_id: Optional[str],
-        status: str,
-        error_message: Optional[str] = None,
-    ) -> None:
-        save_workflow_record(
-            self.config, raw_state, session_id, status, error_message
-        )
-
-
-# 模块级便捷调用（编排器直接传 config）
-workflow_record_service = None  # 可选：在 app 中绑定 config 后使用实例

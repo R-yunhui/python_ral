@@ -1,49 +1,43 @@
 """
 工作流生成 Agent
 
-直接加载 bisheng-workflow-generator SKILL.md 到 system prompt，
-单次 LLM 调用生成毕昇工作流 JSON，配合程序化校验与修复循环。
+标准 agent-skills 模式：
+- SkillRegistry + LocalFileSystemSkillProvider 注册 bisheng-workflow-generator 技能
+- create_agent 创建带工具循环的 agent（skill 工具 + validate_workflow 自定义工具）
+- Agent 按需读取 SKILL.md / 参考文档 / 示例（渐进式加载，避免系统提示过长）
+- 最终程序化校验 + 规范化作为安全兜底
 """
 
+import json
 import logging
 import re
+import uuid
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_core.runnables.config import RunnableConfig
+from langchain.agents import create_agent
 from langchain_core.callbacks import UsageMetadataCallbackHandler
+from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import tool
+from langgraph.checkpoint.memory import InMemorySaver
 
-from models.intent import EnhancedIntent
-from agents.tool_agent import ToolPlan
+from agentskills_core import SkillRegistry
+from agentskills_fs import LocalFileSystemSkillProvider
+from agentskills_langchain import get_tools, get_tools_usage_instructions
+
 from agents.knowledge_agent import KnowledgeMatch
-from core.utils import extract_json
+from agents.tool_agent import ToolPlan
 from core.prompt_loader import get_prompt_loader
+from core.utils import extract_json
+from models.intent import EnhancedIntent
 
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_BISHENG_SKILL_DIR = _REPO_ROOT / "skills" / "bisheng-workflow-generator"
-
-_skill_cache: Optional[str] = None
+_SKILLS_DIR = _REPO_ROOT / "skills"
 
 
-def _load_skill_content() -> str:
-    """读取 SKILL.md 内容（启动后只读一次，缓存到内存）。"""
-    global _skill_cache
-    if _skill_cache is not None:
-        return _skill_cache
-
-    skill_path = _BISHENG_SKILL_DIR / "SKILL.md"
-    if not skill_path.exists():
-        logger.warning("SKILL.md 不存在: %s", skill_path)
-        _skill_cache = ""
-        return _skill_cache
-
-    _skill_cache = skill_path.read_text(encoding="utf-8")
-    logger.info("SKILL.md 已加载（%d 字符）", len(_skill_cache))
-    return _skill_cache
+# ─── 程序化校验辅助 ─────────────────────────────────────────────
 
 
 def _get_branch_reachable(
@@ -264,8 +258,11 @@ def _validate_workflow_impl(
     return issues
 
 
+# ─── Agent 类 ──────────────────────────────────────────────────
+
+
 class WorkflowAgent:
-    """工作流生成专家（直接加载 SKILL.md + 单次 LLM 调用 + 程序化校验修复）"""
+    """工作流生成专家（标准 agent-skills + validate_workflow 工具 + 程序化校验兜底）"""
 
     MAX_FIX_ROUNDS = 2
 
@@ -276,7 +273,29 @@ class WorkflowAgent:
     ):
         self.llm = llm
         self._prompts_dir = prompts_dir
-        self._usage_callback = UsageMetadataCallbackHandler()
+        self._registry: Optional[SkillRegistry] = None
+        self._skill_tools: list = []
+        self._catalog: str = ""
+        self._instructions: str = ""
+
+    async def _ensure_initialized(self) -> None:
+        """懒初始化：注册 skill、生成工具、获取 catalog（仅首次调用）"""
+        if self._registry is not None:
+            return
+
+        self._registry = SkillRegistry()
+        provider = LocalFileSystemSkillProvider(_SKILLS_DIR)
+        await self._registry.register("bisheng-workflow-generator", provider)
+
+        self._skill_tools = get_tools(self._registry)
+        self._catalog = await self._registry.get_skills_catalog(format="xml")
+        self._instructions = get_tools_usage_instructions()
+
+        logger.info(
+            "agent-skills 初始化完成: tools=%s, catalog_len=%d",
+            [t.name for t in self._skill_tools],
+            len(self._catalog),
+        )
 
     async def generate_workflow(
         self,
@@ -284,6 +303,8 @@ class WorkflowAgent:
         tool_plan: ToolPlan,
         knowledge_match: KnowledgeMatch,
     ) -> Dict[str, Any]:
+        await self._ensure_initialized()
+
         tools_info = self._format_tools_info(tool_plan)
         knowledge_info = self._format_knowledge_info(knowledge_match)
 
@@ -304,10 +325,37 @@ class WorkflowAgent:
             knowledge_info=knowledge_info,
         )
 
-        skill_content = _load_skill_content()
         system_prompt = (
             f"{task_prompt}\n\n"
-            f"【毕昇工作流 JSON 规范（SKILL.md）】\n{skill_content}"
+            f"{self._catalog}\n\n"
+            f"{self._instructions}"
+        )
+
+        # validate_workflow 通过闭包捕获当前请求的 tool_plan
+        @tool
+        def validate_workflow(workflow_json_str: str) -> str:
+            """校验毕昇工作流 JSON 是否符合平台规范。传入完整的 JSON 字符串，返回校验结果。"""
+            try:
+                wf = json.loads(workflow_json_str)
+            except json.JSONDecodeError as e:
+                return json.dumps(
+                    {"passed": False, "issues": [f"JSON 解析失败: {e}"]},
+                    ensure_ascii=False,
+                )
+            issues = _validate_workflow_impl(wf, tool_plan)
+            return json.dumps(
+                {"passed": len(issues) == 0, "issues": issues},
+                ensure_ascii=False,
+            )
+
+        all_tools = list(self._skill_tools) + [validate_workflow]
+
+        checkpointer = InMemorySaver()
+        agent = create_agent(
+            model=self.llm,
+            tools=all_tools,
+            system_prompt=system_prompt,
+            checkpointer=checkpointer,
         )
 
         user_msg_tpl = loader.get("workflow", "user_message")
@@ -315,34 +363,42 @@ class WorkflowAgent:
             intent_rewritten_input=intent.rewritten_input
         )
 
-        logger.info("开始生成工作流（直接 LLM 调用，skill=%d 字符）", len(skill_content))
+        thread_id = uuid.uuid4().hex
+        usage_cb = UsageMetadataCallbackHandler()
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "callbacks": [usage_cb],
+        }
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_message),
-        ]
+        logger.info(
+            "开始生成工作流（agent-skills 模式，tools=%d）", len(all_tools)
+        )
 
-        # --- 第一次调用：生成工作流 ---
-        content = await self._call_llm(messages)
-        if not content:
-            return {"error": "工作流生成失败：LLM 未返回有效内容", "content": ""}
+        # ── 第一轮：agent 自行读取 skill、生成、校验 ──
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": user_message}]},
+            config=config,
+        )
+        self._log_usage(usage_cb)
 
+        content = result["messages"][-1].content
         workflow_json = extract_json(content)
+
         if not workflow_json:
-            logger.warning("第一次生成的内容无法提取 JSON")
+            logger.warning("Agent 输出无法提取 JSON")
             return {"error": "工作流生成失败：无法提取 JSON", "content": content}
 
         workflow_json = self._normalize_workflow(workflow_json, tool_plan)
 
-        # --- 程序化校验 + 修复循环 ---
+        # ── 安全兜底：程序化校验 + 修复循环 ──
         for fix_round in range(self.MAX_FIX_ROUNDS):
             issues = _validate_workflow_impl(workflow_json, tool_plan)
             if not issues:
-                logger.info("工作流校验通过（第 %d 轮）", fix_round + 1)
+                logger.info("最终校验通过（第 %d 轮）", fix_round + 1)
                 break
 
             logger.info(
-                "工作流校验发现 %d 个问题（第 %d 轮），发起修复调用",
+                "最终校验发现 %d 个问题（第 %d 轮），通过 agent 修复",
                 len(issues), fix_round + 1,
             )
             fix_prompt = (
@@ -351,14 +407,13 @@ class WorkflowAgent:
                 + "\n\n请输出修复后的完整工作流 JSON（```json 代码块）。"
             )
 
-            messages.append(AIMessage(content=content))
-            messages.append(HumanMessage(content=fix_prompt))
+            result = await agent.ainvoke(
+                {"messages": [{"role": "user", "content": fix_prompt}]},
+                config=config,
+            )
+            self._log_usage(usage_cb)
 
-            content = await self._call_llm(messages)
-            if not content:
-                logger.warning("修复调用未返回有效内容，使用上一版本")
-                break
-
+            content = result["messages"][-1].content
             fixed_json = extract_json(content)
             if not fixed_json:
                 logger.warning("修复调用返回内容无法提取 JSON，使用上一版本")
@@ -372,31 +427,15 @@ class WorkflowAgent:
         )
         return workflow_json
 
-    async def _call_llm(self, messages: list) -> str:
-        """调用 LLM 并返回文本内容。"""
-        try:
-            result = await self.llm.ainvoke(
-                messages,
-                config=RunnableConfig(callbacks=[self._usage_callback]),
-            )
-        except Exception as e:
-            logger.exception("LLM 调用异常: %s", e)
-            return ""
+    # ─── 使用量日志 ─────────────────────────────────────────────
 
-        self._log_usage()
-
-        content = getattr(result, "content", None)
-        if isinstance(content, str) and content.strip():
-            return content
-        return ""
-
-    def _log_usage(self) -> None:
+    def _log_usage(self, cb: UsageMetadataCallbackHandler) -> None:
         model_key = getattr(self.llm, "model_name", None) or getattr(
             self.llm, "model", None
         )
         if not model_key:
             return
-        usage = self._usage_callback.usage_metadata.get(model_key)
+        usage = cb.usage_metadata.get(model_key)
         if usage:
             logger.info(
                 "LLM tokens: in=%s out=%s total=%s",
@@ -405,14 +444,12 @@ class WorkflowAgent:
                 usage.get("total_tokens"),
             )
 
-    # ─── 后处理：规范化 ───────────────────────────────────────────
+    # ─── 后处理：规范化 ─────────────────────────────────────────
 
     def _normalize_workflow(
         self, w: Dict[str, Any], tool_plan: Optional[ToolPlan] = None
     ) -> Dict[str, Any]:
-        """
-        规范化工作流 JSON，补全毕昇前端必需的字段，避免导入时报错。
-        """
+        """规范化工作流 JSON，补全毕昇前端必需的字段。"""
         from datetime import datetime
 
         now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
@@ -676,7 +713,7 @@ class WorkflowAgent:
                 )
                 data["tool_key"] = fixed_key
 
-    # ─── 格式化辅助 ──────────────────────────────────────────────
+    # ─── 格式化辅助 ─────────────────────────────────────────────
 
     def _format_tools_info(self, tool_plan: ToolPlan) -> str:
         if not tool_plan.selected_tools:
@@ -705,12 +742,12 @@ class WorkflowAgent:
         return "\n".join(lines)
 
     @staticmethod
-    def _is_mcp_tool(tool) -> bool:
-        if tool.extra:
-            ct = tool.extra.get("connection_type", "")
+    def _is_mcp_tool(tool_item) -> bool:
+        if tool_item.extra:
+            ct = tool_item.extra.get("connection_type", "")
             if ct and ct != "builtin":
                 return True
-        return bool(re.search(r"_\d{4,}$", tool.tool_key))
+        return bool(re.search(r"_\d{4,}$", tool_item.tool_key))
 
     def _format_knowledge_info(self, knowledge_match: KnowledgeMatch) -> str:
         if not knowledge_match.matched_knowledge_bases:
