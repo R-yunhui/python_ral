@@ -50,6 +50,7 @@ async def run_workflow_generation(
     knowledge_match = state.get("knowledge_match") or KnowledgeMatch(
         required=False
     )
+    flow_sketch = state.get("flow_sketch")
 
     cfg = ctx.config
     last_error: Optional[str] = None
@@ -60,6 +61,7 @@ async def run_workflow_generation(
                 intent=intent,
                 tool_plan=tool_plan,
                 knowledge_match=knowledge_match,
+                flow_sketch=flow_sketch,
             )
             if isinstance(workflow_result, dict) and "error" in workflow_result:
                 last_error = workflow_result.get(

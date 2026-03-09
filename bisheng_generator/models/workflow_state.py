@@ -14,6 +14,8 @@ class WorkflowState(TypedDict):
     intent: Optional[EnhancedIntent]
     tool_plan: Optional[ToolPlan]
     knowledge_match: Optional[KnowledgeMatch]
+    flow_sketch: NotRequired[Optional[Dict[str, Any]]]
+    """流程图草图：nodes + edges，供工作流生成节点严格按结构展开"""
     workflow: Optional[Dict[str, Any]]
     error: Optional[str]
     warnings: NotRequired[Optional[List[str]]]

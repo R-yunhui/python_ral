@@ -43,6 +43,9 @@ class AgentName(str, Enum):
     KNOWLEDGE_MATCHING = "knowledge_matching"
     """知识库匹配 Agent"""
     
+    FLOW_SKETCH = "flow_sketch"
+    """流程图草图 Agent"""
+    
     WORKFLOW_GENERATION = "workflow_generation"
     """工作流生成 Agent"""
 
@@ -141,6 +144,7 @@ class ProgressEvent(BaseModel):
             AgentName.INTENT_UNDERSTANDING: "意图理解",
             AgentName.TOOL_SELECTION: "工具选择",
             AgentName.KNOWLEDGE_MATCHING: "知识库匹配",
+            AgentName.FLOW_SKETCH: "流程图草图",
             AgentName.WORKFLOW_GENERATION: "工作流生成",
             AgentName.IMPORT: "导入到毕昇",
         }
@@ -163,6 +167,7 @@ class ProgressEvent(BaseModel):
             AgentName.INTENT_UNDERSTANDING: "意图理解",
             AgentName.TOOL_SELECTION: "工具选择",
             AgentName.KNOWLEDGE_MATCHING: "知识库匹配",
+            AgentName.FLOW_SKETCH: "流程图草图",
             AgentName.WORKFLOW_GENERATION: "工作流生成",
             AgentName.IMPORT: "导入到毕昇",
         }
@@ -191,6 +196,7 @@ class ProgressEvent(BaseModel):
             AgentName.INTENT_UNDERSTANDING: "意图理解",
             AgentName.TOOL_SELECTION: "工具选择",
             AgentName.KNOWLEDGE_MATCHING: "知识库匹配",
+            AgentName.FLOW_SKETCH: "流程图草图",
             AgentName.WORKFLOW_GENERATION: "工作流生成",
             AgentName.IMPORT: "导入到毕昇",
         }
@@ -252,6 +258,7 @@ class ProgressEvent(BaseModel):
             AgentName.INTENT_UNDERSTANDING: 25.0,
             AgentName.TOOL_SELECTION: 50.0,
             AgentName.KNOWLEDGE_MATCHING: 75.0,
+            AgentName.FLOW_SKETCH: 82.0,
             AgentName.WORKFLOW_GENERATION: 95.0,
             AgentName.IMPORT: 100.0,
         }
@@ -271,6 +278,10 @@ class ProgressEvent(BaseModel):
         elif agent_name == AgentName.KNOWLEDGE_MATCHING:
             knowledge_count = data.get("knowledge_count", 0)
             return f"✅ 知识库匹配完成：匹配到 {knowledge_count} 个知识库"
+        
+        elif agent_name == AgentName.FLOW_SKETCH:
+            nodes_count = data.get("nodes_count", 0)
+            return f"✅ 流程图草图完成：{nodes_count} 个节点"
         
         elif agent_name == AgentName.WORKFLOW_GENERATION:
             return "✅ 工作流生成完成"

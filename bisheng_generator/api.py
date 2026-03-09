@@ -110,6 +110,8 @@ class GenerateResponse(BaseModel):
     message: str
     workflow: Optional[dict] = None
     metadata: Optional[dict] = None
+    flow_sketch_mermaid: Optional[str] = None
+    """流程图草图（Mermaid 语法），供前端直接渲染"""
     error: Optional[str] = None
     file_path: Optional[str] = None
     import_result: Optional[dict] = None

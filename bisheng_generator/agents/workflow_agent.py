@@ -36,6 +36,13 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SKILLS_DIR = _REPO_ROOT / "skills"
 
+# 工具节点中表示「用户输入/查询条件/地域/时间/关键词」等的参数 key，不应写死为具体值
+_USER_VARIABLE_TOOL_PARAM_KEYS = frozenset({
+    "province", "city", "district", "region", "date", "start_date", "end_date",
+    "keyword", "query", "search_keyword", "company_status", "location", "status",
+    "name", "q", "search", "location_name",
+})
+
 
 # ─── 程序化校验辅助 ─────────────────────────────────────────────
 
@@ -255,6 +262,29 @@ def _validate_workflow_impl(
                 "供下游 Condition 节点判断解析是否成功"
             )
 
+    # 9. 检测工具节点中用户/查询类参数被写死为具体值（应留空或绑定变量）
+    for node in nodes:
+        data = node.get("data", {})
+        if data.get("type") != "tool":
+            continue
+        nid = node.get("id", "")
+        for grp in data.get("group_params", []):
+            if grp.get("name") != "工具参数":
+                continue
+            for p in grp.get("params", []):
+                key = p.get("key", "")
+                if key not in _USER_VARIABLE_TOOL_PARAM_KEYS:
+                    continue
+                val = p.get("value")
+                if not isinstance(val, str) or not val.strip():
+                    continue
+                if "{{#" in val:
+                    continue
+                issues.append(
+                    f"工具节点 {nid} 的参数 '{key}' 不应写死为具体值 \"{val[:30]}{'...' if len(val) > 30 else ''}\"，"
+                    "此类参数应留空或绑定到输入/上游变量（如 {{#input_xxx.user_input#}}、{{#code_xxx.字段#}}）"
+                )
+
     return issues
 
 
@@ -302,6 +332,7 @@ class WorkflowAgent:
         intent: EnhancedIntent,
         tool_plan: ToolPlan,
         knowledge_match: KnowledgeMatch,
+        flow_sketch: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         await self._ensure_initialized()
 
@@ -324,6 +355,18 @@ class WorkflowAgent:
             tools_info=tools_info,
             knowledge_info=knowledge_info,
         )
+        if flow_sketch and isinstance(flow_sketch.get("nodes"), list):
+            import json as _json
+            sketch_json = _json.dumps(
+                flow_sketch, ensure_ascii=False, indent=2
+            )
+            task_prompt = (
+                task_prompt
+                + "\n\n【必须遵守的流程图草图】\n"
+                "以下为已确定的流程图结构（nodes 与 edges），请严格按此结构生成完整毕昇工作流 JSON："
+                "不得合并、省略或新增草图以外的分支，不得改变节点类型与连线关系。\n\n"
+                f"{sketch_json}\n"
+            )
 
         system_prompt = (
             f"{task_prompt}\n\n"
@@ -529,6 +572,26 @@ class WorkflowAgent:
         if node_type == "code":
             self._normalize_code_node(data)
 
+        if node_type == "tool":
+            self._clear_tool_param_hardcoded_values(data)
+
+    def _clear_tool_param_hardcoded_values(self, data: Dict[str, Any]) -> None:
+        """将工具节点中「用户/查询类」参数的非变量写死值清空，避免固定为某地/某日等。"""
+        for grp in data.get("group_params", []):
+            if grp.get("name") != "工具参数":
+                continue
+            for p in grp.get("params", []):
+                if p.get("key") not in _USER_VARIABLE_TOOL_PARAM_KEYS:
+                    continue
+                val = p.get("value")
+                if isinstance(val, str) and val.strip() and "{{#" not in val:
+                    p["value"] = ""
+                    logger.debug(
+                        "清空工具参数写死值: key=%s, node=%s",
+                        p.get("key"),
+                        data.get("id"),
+                    )
+
     def _ensure_param_value(self, p: Dict[str, Any]) -> None:
         pt = p.get("type", "")
         if "value" not in p or p["value"] is None:
@@ -722,6 +785,8 @@ class WorkflowAgent:
         lines = [
             "⚠️ 重要：以下每个工具的 tool_key 必须原样写入生成的 JSON，"
             "禁止省略、修改或截断任何部分（MCP 工具的 _数字ID 后缀不可删除）：",
+            "工具参数中，表示用户输入、查询条件、地域、时间、关键词等的参数（如 province/city/date/query 等）"
+            "请将 value 留空或绑定到输入/上游变量，不要写死为具体地名、日期、关键词。",
         ]
         for t in tool_plan.selected_tools:
             tool_type = "MCP工具" if self._is_mcp_tool(t) else "内置工具"
@@ -764,3 +829,71 @@ class WorkflowAgent:
                     lines.append(f"  collection: {collection}")
 
         return "\n".join(lines)
+
+    # ─── 流程图草图（先于完整工作流生成）─────────────────────────
+
+    async def generate_flow_sketch(
+        self,
+        intent: EnhancedIntent,
+        tool_plan: ToolPlan,
+        knowledge_match: KnowledgeMatch,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        根据需求与候选工具/知识库生成流程图草图（仅 nodes + edges）。
+        不依赖 skill，仅用轻量 prompt。失败时返回 None，下游可无草图继续生成。
+        """
+        tools_info = self._format_tools_info(tool_plan)
+        knowledge_info = self._format_knowledge_info(knowledge_match)
+        user_analysis = (
+            f"需求描述：{intent.rewritten_input}\n"
+            f"工作流类型：{intent.get_workflow_type()}\n"
+            f"是否需要工具：{intent.needs_tool}\n"
+            f"是否需要知识库：{intent.needs_knowledge}\n"
+        )
+        loader = get_prompt_loader(self._prompts_dir)
+        system_tpl = loader.get("flow_sketch", "system")
+        user_tpl = loader.get("flow_sketch", "user_message")
+        if not system_tpl or not user_tpl:
+            logger.warning("flow_sketch 提示词未配置，跳过草图")
+            return None
+        system_prompt = system_tpl.format(
+            user_analysis=user_analysis,
+            tools_info=tools_info,
+            knowledge_info=knowledge_info,
+        )
+        user_message = user_tpl.format(
+            intent_rewritten_input=intent.rewritten_input or intent.original_input
+        )
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_message),
+            ]
+            response = await self.llm.ainvoke(messages)
+            content = (
+                response.content
+                if hasattr(response, "content")
+                else str(response)
+            )
+            sketch = extract_json(content)
+            if not sketch or not isinstance(sketch, dict):
+                logger.warning("流程图草图解析失败：未得到有效 JSON")
+                return None
+            nodes = sketch.get("nodes")
+            edges = sketch.get("edges")
+            if not isinstance(nodes, list) or not isinstance(edges, list):
+                logger.warning(
+                    "流程图草图格式错误：缺少 nodes 或 edges 数组"
+                )
+                return None
+            logger.info(
+                "流程图草图生成完成，nodes=%d, edges=%d",
+                len(nodes),
+                len(edges),
+            )
+            return {"nodes": nodes, "edges": edges}
+        except Exception as e:
+            logger.warning("流程图草图生成异常：%s，将无草图继续生成", e)
+            return None

@@ -51,6 +51,11 @@ document.addEventListener('DOMContentLoaded', () => {
     bind();
     loadToken();
     initTextarea();
+    if (window.mermaid) {
+        try {
+            window.mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
+        } catch (_) {}
+    }
 });
 
 // ==================== Token ====================
@@ -187,6 +192,7 @@ function stream(query, sid, resume, originalQuery) {
                             status: 'success',
                             workflow: payload.workflow,
                             metadata: payload.metadata || {},
+                            flow_sketch_mermaid: payload.flow_sketch_mermaid || null,
                             file_path: payload.file_path,
                             import_result: payload.import_result || null,
                         };
@@ -317,6 +323,30 @@ function updateStep(card, agent, status, msg, dur, details) {
         det.innerHTML = detailHtml;
     }
 
+    if (details && details.flow_sketch_mermaid && typeof window.mermaid !== 'undefined') {
+        let mwrap = li.querySelector('.step-mermaid');
+        if (!mwrap) {
+            mwrap = document.createElement('div');
+            mwrap.className = 'step-mermaid res-mermaid-wrap mermaid-collapsible';
+            mwrap.innerHTML =
+                '<div class="mermaid-toggle-bar">' +
+                    '<span class="mermaid-toggle-label">流程图草图</span>' +
+                    '<button class="mermaid-toggle-btn" type="button">收起 ▴</button>' +
+                '</div>' +
+                '<div class="mermaid-content"><pre class="mermaid">' + esc(details.flow_sketch_mermaid) + '</pre></div>';
+            li.querySelector('.step-body')?.appendChild(mwrap);
+            mwrap.querySelector('.mermaid-toggle-bar')?.addEventListener('click', function() {
+                mwrap.classList.toggle('collapsed');
+                var btn = mwrap.querySelector('.mermaid-toggle-btn');
+                if (btn) btn.textContent = mwrap.classList.contains('collapsed') ? '展开 ▾' : '收起 ▴';
+            });
+            var mNodes = mwrap.querySelectorAll('.mermaid');
+            if (mNodes.length) {
+                window.mermaid.run({ nodes: mNodes }).catch(function() {});
+            }
+        }
+    }
+
     if (dur != null) {
         let durEl = li.querySelector('.step-dur');
         if (!durEl) { durEl = document.createElement('span'); durEl.className = 'step-dur'; li.appendChild(durEl); }
@@ -423,6 +453,16 @@ function addResult(data) {
     h += '<div class="res-meta-item"><span class="res-meta-label">知识库</span><span class="res-meta-val">' + kbCount + ' 个</span></div>';
     h += '</div>';
 
+    if (data.flow_sketch_mermaid && data.flow_sketch_mermaid.trim()) {
+        h += '<div class="res-mermaid-wrap mermaid-collapsible">' +
+            '<div class="mermaid-toggle-bar">' +
+                '<span class="mermaid-toggle-label">流程图草图</span>' +
+                '<button class="mermaid-toggle-btn" type="button">收起 ▴</button>' +
+            '</div>' +
+            '<div class="mermaid-content"><pre class="mermaid">' + esc(data.flow_sketch_mermaid) + '</pre></div>' +
+        '</div>';
+    }
+
     const ir = data.import_result || {};
     const hasChat = ir.chat_url;
     const hasEdit = ir.flow_edit_url;
@@ -439,11 +479,25 @@ function addResult(data) {
     const el = document.createElement('div');
     el.className = 'msg msg-result-card';
     el.innerHTML = h;
-    chatMessages.appendChild(el);
     el.querySelector('._imp')?.addEventListener('click', doImport);
     el.querySelector('._dl')?.addEventListener('click', doDownload);
     el.querySelector('._cp')?.addEventListener('click', doCopy);
     el.querySelector('._json')?.addEventListener('click', openJsonModal);
+    chatMessages.appendChild(el);
+    if (data.flow_sketch_mermaid && typeof window.mermaid !== 'undefined') {
+        var mwrap = el.querySelector('.mermaid-collapsible');
+        if (mwrap) {
+            mwrap.querySelector('.mermaid-toggle-bar')?.addEventListener('click', function() {
+                mwrap.classList.toggle('collapsed');
+                var btn = mwrap.querySelector('.mermaid-toggle-btn');
+                if (btn) btn.textContent = mwrap.classList.contains('collapsed') ? '展开 ▾' : '收起 ▴';
+            });
+        }
+        var mermaidNodes = el.querySelectorAll('.mermaid');
+        if (mermaidNodes.length) {
+            window.mermaid.run({ nodes: mermaidNodes }).catch(function() {});
+        }
+    }
     scroll();
 }
 

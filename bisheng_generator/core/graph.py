@@ -15,6 +15,7 @@ from core.nodes import (
     run_intent_understanding,
     run_tool_selection,
     run_knowledge_matching,
+    run_flow_sketch,
     run_workflow_generation,
 )
 from agents.user_agent import UserAgent
@@ -22,6 +23,7 @@ from agents.tool_agent import ToolAgent, ToolPlan
 from agents.knowledge_agent import KnowledgeAgent, KnowledgeMatch
 from agents.workflow_agent import WorkflowAgent
 from models.progress import ProgressEvent
+from core.utils import sketch_to_mermaid
 from services.workflow_record_service import save_workflow_record
 from core.intent_history import (
     add_intent_assistant_message_from_pending,
@@ -109,9 +111,10 @@ class WorkflowOrchestrator:
         流程：
         START → intent_understanding → [条件分发]
             ├─→ tool_selection ──┐
-            │                    ├─→ workflow_generation → END
+            │                    ├─→ flow_sketch → workflow_generation → END
             └─→ knowledge_matching ┘
-        注：tool 和 knowledge 节点可并行触发，workflow_generation 节点会自动等待。
+            direct ──────────────┘
+        注：tool 与 knowledge 可并行，均汇入 flow_sketch；direct 直连 flow_sketch；草图后再生成完整工作流。
 
         Returns:
             编译后的 StateGraph
@@ -123,25 +126,27 @@ class WorkflowOrchestrator:
         builder.add_node("intent_understanding", self._run_intent_understanding)
         builder.add_node("tool_selection", self._run_tool_selection)
         builder.add_node("knowledge_matching", self._run_knowledge_matching)
+        builder.add_node("flow_sketch", self._run_flow_sketch)
         builder.add_node("workflow_generation", self._run_workflow_generation)
 
         # 添加边
         builder.add_edge(START, "intent_understanding")
 
-        # 条件边：根据意图决定并行分发
+        # 条件边：根据意图决定并行分发（direct 也进草图，再进生成）
         builder.add_conditional_edges(
             "intent_understanding",
             self._route_after_intent,
             {
                 "tool": "tool_selection",
                 "knowledge": "knowledge_matching",
-                "direct": "workflow_generation",
+                "direct": "flow_sketch",
             },
         )
 
-        # 工具选择和知识库匹配均指向生成，生成节点作为汇合点 (Fan-in)
-        builder.add_edge("tool_selection", "workflow_generation")
-        builder.add_edge("knowledge_matching", "workflow_generation")
+        # 工具选择、知识库匹配均汇入流程图草图，草图后再生成完整工作流
+        builder.add_edge("tool_selection", "flow_sketch")
+        builder.add_edge("knowledge_matching", "flow_sketch")
+        builder.add_edge("flow_sketch", "workflow_generation")
 
         # 工作流生成后结束
         builder.add_edge("workflow_generation", END)
@@ -190,6 +195,12 @@ class WorkflowOrchestrator:
     ) -> Dict[str, Any]:
         """运行知识库匹配节点（委托到 core.nodes.knowledge_node）。"""
         return await run_knowledge_matching(state, self._node_ctx)
+
+    async def _run_flow_sketch(
+        self, state: WorkflowState
+    ) -> Dict[str, Any]:
+        """运行流程图草图节点（委托到 core.nodes.sketch_node）。"""
+        return await run_flow_sketch(state, self._node_ctx)
 
     async def _run_workflow_generation(
         self, state: WorkflowState
@@ -359,6 +370,13 @@ class WorkflowOrchestrator:
         if result.get("warnings"):
             metadata["warnings"] = result["warnings"]
 
+        flow_sketch_mermaid = ""
+        flow_sketch = result.get("flow_sketch")
+        if flow_sketch and isinstance(flow_sketch, dict):
+            flow_sketch_mermaid = sketch_to_mermaid(flow_sketch) or ""
+        if flow_sketch_mermaid:
+            metadata["flow_sketch_mermaid"] = flow_sketch_mermaid
+
         save_workflow_record(
             self.config,
             result,
@@ -366,13 +384,16 @@ class WorkflowOrchestrator:
             status="success",
             error_message=None,
         )
-        return {
+        out: Dict[str, Any] = {
             "status": "success",
             "message": "工作流生成成功",
             "workflow": result.get("workflow"),
             "metadata": metadata,
             "session_id": session_id,
         }
+        if flow_sketch_mermaid:
+            out["flow_sketch_mermaid"] = flow_sketch_mermaid
+        return out
 
     async def generate_with_progress(
         self,
