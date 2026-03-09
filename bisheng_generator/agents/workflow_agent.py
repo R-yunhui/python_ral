@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional
 from langchain.agents import create_agent
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agentskills_core import SkillRegistry
@@ -36,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SKILLS_DIR = _REPO_ROOT / "skills"
+# 每轮工作流 JSON 调试输出目录（按本次请求 thread_id 分子目录）
+_WORKFLOW_DEBUG_DIR = Path(__file__).resolve().parent.parent / "data" / "workflow_debug"
 
 # 工具节点中表示「用户输入/查询条件/地域/时间/关键词」等的参数 key，不应写死为具体值
 _USER_VARIABLE_TOOL_PARAM_KEYS = frozenset({
@@ -375,24 +376,8 @@ class WorkflowAgent:
             f"{self._instructions}"
         )
 
-        # validate_workflow 通过闭包捕获当前请求的 tool_plan
-        @tool
-        def validate_workflow(workflow_json_str: str) -> str:
-            """校验毕昇工作流 JSON 是否符合平台规范。传入完整的 JSON 字符串，返回校验结果。"""
-            try:
-                wf = json.loads(workflow_json_str)
-            except json.JSONDecodeError as e:
-                return json.dumps(
-                    {"passed": False, "issues": [f"JSON 解析失败: {e}"]},
-                    ensure_ascii=False,
-                )
-            issues = _validate_workflow_impl(wf, tool_plan)
-            return json.dumps(
-                {"passed": len(issues) == 0, "issues": issues},
-                ensure_ascii=False,
-            )
-
-        all_tools = list(self._skill_tools) + [validate_workflow]
+        # 仅使用 skill 工具（get_skill_body、get_skill_reference 等）；校验在生成后由程序化 _validate_workflow_impl + 修复轮完成，避免 agent 在对话中反复调用校验工具导致变慢
+        all_tools = list(self._skill_tools)
 
         checkpointer = InMemorySaver()
         agent = create_agent(
@@ -408,6 +393,7 @@ class WorkflowAgent:
         )
 
         thread_id = uuid.uuid4().hex
+        debug_dir = _WORKFLOW_DEBUG_DIR / thread_id
         usage_cb = UsageMetadataCallbackHandler()
         config = {
             "configurable": {"thread_id": thread_id},
@@ -418,14 +404,47 @@ class WorkflowAgent:
             "开始生成工作流（agent-skills 模式，tools=%d）", len(all_tools)
         )
 
-        # ── 第一轮：agent 自行读取 skill、生成、校验 ──
-        result = await agent.ainvoke(
+        # ── 第一轮：用 astream_events 便于记录中间过程（skill/工具调用），并从同一流中取最终结果 ──
+        final_content = None
+        async for event in agent.astream_events(
             {"messages": [{"role": "user", "content": user_message}]},
             config=config,
-        )
+            version="v2",
+        ):
+            kind = event.get("event")
+            # 中间过程：工具/Skill 调用开始（如 get_skill_body、get_skill_reference、validate_workflow）
+            if kind == "on_tool_start":
+                data = event.get("data", {})
+                tool_name = event.get("name", "")
+                tool_input = data.get("input", data)
+                logger.info(
+                    "[workflow_agent] Skill/工具开始 name=%s input=%s",
+                    tool_name,
+                    str(tool_input)[:200] + ("..." if len(str(tool_input)) > 200 else ""),
+                )
+            # 中间过程：工具/Skill 调用结束
+            elif kind == "on_tool_end":
+                out = event.get("data", {}).get("output", "")
+                logger.info(
+                    "[workflow_agent] Skill/工具结束 name=%s output_len=%d preview=%s",
+                    event.get("name", ""),
+                    len(str(out)),
+                    str(out)[:150] + ("..." if len(str(out)) > 150 else ""),
+                )
+            # 最终结果：根 agent 结束时，output 为最终 state（含 messages）
+            elif kind == "on_chain_end":
+                if event.get("parent_ids") == []:
+                    output = event.get("data", {}).get("output")
+                    if output and isinstance(output, dict) and "messages" in output:
+                        messages = output["messages"]
+                        if messages:
+                            last_msg = messages[-1]
+                            if hasattr(last_msg, "content") and last_msg.content:
+                                final_content = last_msg.content
+                                break
         self._log_usage(usage_cb)
 
-        content = result["messages"][-1].content
+        content = final_content or ""
         workflow_json = extract_json(content)
 
         if not workflow_json:
@@ -433,6 +452,7 @@ class WorkflowAgent:
             return {"error": "工作流生成失败：无法提取 JSON", "content": content}
 
         workflow_json = self._normalize_workflow(workflow_json, tool_plan)
+        self._write_debug_round(debug_dir, "round_1", workflow_json)
 
         # ── 安全兜底：程序化校验 + 修复循环 ──
         for fix_round in range(self.MAX_FIX_ROUNDS):
@@ -445,6 +465,8 @@ class WorkflowAgent:
                 "最终校验发现 %d 个问题（第 %d 轮），通过 agent 修复",
                 len(issues), fix_round + 1,
             )
+            for idx, issue in enumerate(issues, 1):
+                logger.info("  校验问题 %d: %s", idx, issue)
             fix_prompt = (
                 "上一版工作流 JSON 存在以下问题，请修复后重新输出完整的 JSON：\n\n"
                 + "\n".join(f"- {i}" for i in issues)
@@ -464,12 +486,31 @@ class WorkflowAgent:
                 break
 
             workflow_json = self._normalize_workflow(fixed_json, tool_plan)
+            self._write_debug_round(
+                debug_dir, f"round_{fix_round + 2}", workflow_json
+            )
 
+        self._write_debug_round(debug_dir, "final", workflow_json)
         logger.info(
             "工作流生成完成，nodes=%d",
             len(workflow_json.get("nodes", [])),
         )
         return workflow_json
+
+    def _write_debug_round(
+        self, debug_dir: Path, round_name: str, workflow_json: Dict[str, Any]
+    ) -> None:
+        """将当前轮的工作流 JSON 写入调试目录，便于按请求分析各轮差异。写入失败不抛错。"""
+        if not debug_dir or not workflow_json:
+            return
+        try:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            path = debug_dir / f"{round_name}.json"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(workflow_json, f, ensure_ascii=False, indent=2)
+            logger.info("[workflow_debug] 已写入 %s", path)
+        except Exception as e:
+            logger.warning("[workflow_debug] 写入 %s 失败: %s", round_name, e)
 
     # ─── 使用量日志 ─────────────────────────────────────────────
 

@@ -220,13 +220,38 @@ async def main_with_structured_output(query: str):
         )
         print("\nAgent 创建成功 (带 JSON 解析器)!")
 
-        # 执行并自动解析 JSON
-        result = await agent.ainvoke({"messages": [{"role": "user", "content": query}]})
+        # 用于在一次 astream_events 中保存最终回复，避免再调用 ainvoke 重复执行
+        final_content = None
 
-        # 提取最后一条消息的内容
-        content = result["messages"][-1].content
+        # 一次流式事件即可：既打印中间过程（skill 调用），又从根节点 on_chain_end 取最终结果
+        # 不传 include_types 以便收到 on_chain_end，否则拿不到最终 state
+        async for event in agent.astream_events(
+            {"messages": [{"role": "user", "content": query}]},
+            version="v2",
+        ):
+            kind = event.get("event")
+            # ---- 中间过程：Skill 调用开始 ----
+            if kind == "on_tool_start":
+                data = event.get("data", {})
+                print(f"\n[Skill 开始] {event.get('name')} 输入: {data.get('input')}")
+            # ---- 中间过程：Skill 调用结束 ----
+            elif kind == "on_tool_end":
+                out = event.get("data", {}).get("output", "")
+                print(f"[Skill 结束] 输出: {str(out)[:300]}...")
+            # ---- 最终结果：根 agent 结束时，output 为最终 state（含 messages） ----
+            elif kind == "on_chain_end":
+                if event.get("parent_ids") == []:
+                    output = event.get("data", {}).get("output")
+                    if output and isinstance(output, dict) and "messages" in output:
+                        messages = output["messages"]
+                        if messages:
+                            last_msg = messages[-1]
+                            if hasattr(last_msg, "content") and last_msg.content:
+                                final_content = last_msg.content
+                                break
 
-        # 使用解析器提取 JSON
+        # 从事件流中拿到的最终回复，解析为 JSON
+        content = final_content or ""
         json_data = extract_json_from_content(content)
 
         if json_data:

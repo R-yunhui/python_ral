@@ -61,8 +61,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    """FastAPI 生命周期：MySQL 已配置时自动创建表。"""
-    if config.is_mysql_configured():
+    """FastAPI 生命周期：数据库启用时（MySQL 或 SQLite）自动创建表。"""
+    if config.is_db_enabled():
         from db.database import init_db
         init_db(config)
     yield
