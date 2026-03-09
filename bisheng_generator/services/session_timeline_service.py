@@ -1,4 +1,4 @@
-"""会话时间线服务：写入与查询时间线（仅当 MySQL 已配置时生效）"""
+"""会话时间线服务：写入与查询时间线（数据库启用时生效，支持 MySQL 和 SQLite）"""
 
 import logging
 from datetime import datetime

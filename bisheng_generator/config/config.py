@@ -108,7 +108,14 @@ class Config(BaseModel):
     service_host: str = Field(default="0.0.0.0", description="服务监听地址")
     service_port: int = Field(default=8000, description="服务端口")
 
-    # MySQL：工作流生成记录持久化（配置后生效，未配置则不落库；表自动创建）
+    # 数据库：工作流生成记录持久化
+    # - 配置了 MySQL 连接信息时使用 MySQL
+    # - 未配置 MySQL 时自动 fallback 到 SQLite（零配置）
+    # - 设置 DB_ENABLED=false 可完全禁用数据库
+    db_enabled: bool = Field(
+        default_factory=lambda: os.getenv("DB_ENABLED", "true").lower() in ("true", "1", "yes"),
+        description="是否启用数据库，设为 false 时完全不落库",
+    )
     mysql_host: str = Field(
         default_factory=lambda: os.getenv("MYSQL_HOST", ""),
         description="MySQL 主机",
@@ -131,10 +138,14 @@ class Config(BaseModel):
     )
 
     def is_mysql_configured(self) -> bool:
-        """是否已配置 MySQL（用于决定是否落库与自动建表）"""
+        """是否已配置 MySQL 连接信息"""
         return bool(
             self.mysql_host and self.mysql_user and self.mysql_database
         )
+
+    def is_db_enabled(self) -> bool:
+        """是否启用数据库（MySQL 或 SQLite fallback）"""
+        return self.db_enabled
 
     class Config:
         env_prefix = ""

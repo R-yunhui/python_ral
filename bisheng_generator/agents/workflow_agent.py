@@ -297,7 +297,7 @@ class WorkflowAgent:
         )
 
         loader = get_prompt_loader(self._prompts_dir)
-        system_tpl = loader.load("workflow/system.md")
+        system_tpl = loader.get("workflow", "system")
         task_prompt = system_tpl.format(
             user_analysis=user_analysis,
             tools_info=tools_info,
@@ -310,7 +310,7 @@ class WorkflowAgent:
             f"【毕昇工作流 JSON 规范（SKILL.md）】\n{skill_content}"
         )
 
-        user_msg_tpl = loader.load("workflow/user_message.txt")
+        user_msg_tpl = loader.get("workflow", "user_message")
         user_message = user_msg_tpl.format(
             intent_rewritten_input=intent.rewritten_input
         )

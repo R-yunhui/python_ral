@@ -138,9 +138,9 @@ class UserAgent:
     ):
         self.llm = llm
         loader = get_prompt_loader(prompts_dir)
-        system = loader.load("intent/system.md") or _DEFAULT_SYSTEM_PROMPT
-        human_single = loader.load("intent/human_single.txt") or _DEFAULT_HUMAN_SINGLE
-        human_resume = loader.load("intent/human_resume.txt") or _DEFAULT_HUMAN_RESUME
+        system = loader.get("intent", "system") or _DEFAULT_SYSTEM_PROMPT
+        human_single = loader.get("intent", "human_single") or _DEFAULT_HUMAN_SINGLE
+        human_resume = loader.get("intent", "human_resume") or _DEFAULT_HUMAN_RESUME
 
         self.prompt_single = ChatPromptTemplate.from_messages(
             [

@@ -57,8 +57,8 @@ def save_workflow_record(
     error_message: Optional[str] = None,
 ) -> None:
     """
-    将本次生成结果写入 MySQL（仅当 config 已配置 MySQL 时执行）。
-    使用标准分层：service 组数据，repository 写库。
+    将本次生成结果写入数据库（MySQL 或 SQLite，由 config 决定）。
+    数据库未启用时静默跳过。
 
     Args:
         config: 配置对象
@@ -67,9 +67,6 @@ def save_workflow_record(
         status: success / needs_clarification / error
         error_message: 失败时的错误信息
     """
-    if not config.is_mysql_configured():
-        return
-
     intent = raw_state.get("intent")
     tool_plan = raw_state.get("tool_plan")
     knowledge_match = raw_state.get("knowledge_match")

@@ -99,8 +99,8 @@ class KnowledgeAgent:
         self.knowledge_catalog: List[KnowledgeBaseDefinition] = []
 
         loader = get_prompt_loader(prompts_dir)
-        match_system = loader.load("knowledge/match_system.md") or _DEFAULT_MATCH_SYSTEM
-        match_human = loader.load("knowledge/match_human.md") or _DEFAULT_MATCH_HUMAN
+        match_system = loader.get("knowledge", "match_system") or _DEFAULT_MATCH_SYSTEM
+        match_human = loader.get("knowledge", "match_human") or _DEFAULT_MATCH_HUMAN
 
         self.match_prompt = ChatPromptTemplate.from_messages(
             [
