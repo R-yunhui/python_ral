@@ -8,6 +8,7 @@
 - 最终程序化校验 + 规范化作为安全兜底
 """
 
+from datetime import timezone
 import json
 import logging
 import re
@@ -495,7 +496,7 @@ class WorkflowAgent:
         """规范化工作流 JSON，补全毕昇前端必需的字段。"""
         from datetime import datetime
 
-        now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
         self._normalize_top_level(w, now)
 

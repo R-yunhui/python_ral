@@ -332,18 +332,24 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
 .proc-body{padding:0}
 .proc-steps{list-style:none;padding:0;margin:0}
 .proc-step{
-  display:flex;align-items:flex-start;gap:12px;
-  padding:12px 18px;
+  padding:0;
   border-bottom:1px solid var(--border-l);
   font-size:15px;
   transition:background .1s;
 }
 .proc-step:last-child{border-bottom:none}
-.proc-step:hover{background:var(--bg)}
+
+.step-header{
+  display:flex;align-items:center;gap:10px;
+  padding:11px 18px;
+  cursor:pointer;user-select:none;
+  transition:background .1s;
+}
+.step-header:hover{background:var(--bg)}
+
 .step-icon{
   width:22px;height:22px;border-radius:50%;
   display:grid;place-items:center;font-size:12px;flex-shrink:0;
-  margin-top:1px;
 }
 .step-icon.waiting{background:var(--border-l);color:var(--c-muted)}
 .step-icon.running{background:var(--accent-bg);color:var(--accent);animation:pulse 1.2s ease infinite}
@@ -351,15 +357,31 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
 .step-icon.error{background:var(--red-bg);color:var(--red)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 
-.step-body{flex:1;min-width:0}
-.step-msg{color:var(--c-text);line-height:1.55;font-size:15px}
-.step-detail{font-size:14px;color:var(--c-sub);margin-top:4px;line-height:1.55}
-.step-detail .detail-names{color:var(--c-text);font-weight:500}
+.step-msg{flex:1;min-width:0;color:var(--c-text);line-height:1.45;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .step-dur{
-  font-family:var(--f-m);font-size:12px;color:var(--accent);font-weight:500;
-  flex-shrink:0;margin-top:2px;
-  background:var(--accent-bg);padding:3px 8px;border-radius:4px;
+  font-family:var(--f-m);font-size:11px;color:var(--accent);font-weight:500;
+  flex-shrink:0;
+  background:var(--accent-bg);padding:2px 7px;border-radius:4px;
 }
+.step-chevron{
+  flex-shrink:0;color:var(--c-muted);
+  transition:transform .2s ease;
+  display:none;
+}
+.proc-step.has-details .step-chevron{display:block}
+.proc-step:not(.collapsed) .step-chevron{transform:rotate(90deg)}
+
+.step-collapse{
+  overflow:hidden;
+  max-height:2000px;opacity:1;
+  transition:max-height .25s ease,opacity .15s ease,padding .15s ease;
+  padding:0 18px 10px 50px;
+}
+.proc-step.collapsed .step-collapse{
+  max-height:0;opacity:0;padding-top:0;padding-bottom:0;
+}
+.step-detail{font-size:13px;color:var(--c-sub);line-height:1.55}
+.step-detail .detail-names{color:var(--c-text);font-weight:500}
 
 /* result card inline */
 .msg-result-card{display:block}
@@ -403,12 +425,11 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
 }
 .mermaid-toggle-bar:hover{background:var(--border-l)}
 .mermaid-toggle-label{font-size:13px;color:var(--c-sub);font-weight:600}
-.mermaid-toggle-btn{
-  background:none;border:none;cursor:pointer;
-  font-size:12px;color:var(--c-muted);padding:2px 6px;border-radius:4px;
-  transition:color .15s,background .15s;
+.mermaid-chevron{
+  flex-shrink:0;color:var(--c-muted);
+  transition:transform .2s ease;
 }
-.mermaid-toggle-btn:hover{color:var(--c-text);background:var(--border)}
+.mermaid-collapsible:not(.collapsed) .mermaid-chevron{transform:rotate(90deg)}
 .mermaid-content{
   padding:4px 18px 14px;overflow-x:auto;
   transition:max-height .25s ease,opacity .2s ease,padding .2s ease;

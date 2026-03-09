@@ -430,7 +430,6 @@ class WorkflowOrchestrator:
             is_resume,
         )
         self.progress_callback = progress_callback
-        await self._emit_progress(ProgressEvent.create_start_event(user_input))
 
         if is_resume and session_id:
             result = await self.generate_resume(

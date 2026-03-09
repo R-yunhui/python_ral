@@ -266,15 +266,29 @@ function handleProgress(d) {
     scroll();
 }
 
+const CHEVRON_SVG = '<svg class="step-chevron" width="12" height="12" viewBox="0 0 12 12"><path d="M4.5 2.5l3.5 3.5-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
 function addStep(card, agent, msg, status) {
     const list = card.querySelector('.proc-steps');
     if (!list) return;
+
+    if (agent !== '_sys') {
+        list.querySelectorAll('.proc-step.has-details:not(.collapsed)').forEach(s => s.classList.add('collapsed'));
+    }
+
     const li = document.createElement('li');
     li.className = 'proc-step';
     li.dataset.agent = agent || '';
     li.innerHTML =
-        '<span class="step-icon ' + status + '">' + (STEP_ICONS[status] || '·') + '</span>' +
-        '<div class="step-body"><div class="step-msg">' + esc(msg) + '</div></div>';
+        '<div class="step-header">' +
+            '<span class="step-icon ' + status + '">' + (STEP_ICONS[status] || '·') + '</span>' +
+            '<span class="step-msg">' + esc(msg) + '</span>' +
+            CHEVRON_SVG +
+        '</div>' +
+        '<div class="step-collapse"></div>';
+    li.querySelector('.step-header')?.addEventListener('click', () => {
+        if (li.classList.contains('has-details')) li.classList.toggle('collapsed');
+    });
     list.appendChild(li);
 }
 
@@ -288,6 +302,17 @@ function updateStep(card, agent, status, msg, dur, details) {
     const icon = li.querySelector('.step-icon');
     if (icon) { icon.className = 'step-icon ' + status; icon.textContent = STEP_ICONS[status] || '·'; }
     if (msg) { const m = li.querySelector('.step-msg'); if (m) m.textContent = msg; }
+
+    if (dur != null) {
+        const hdr = li.querySelector('.step-header');
+        let durEl = li.querySelector('.step-dur');
+        if (!durEl && hdr) {
+            durEl = document.createElement('span');
+            durEl.className = 'step-dur';
+            hdr.insertBefore(durEl, hdr.querySelector('.step-chevron'));
+        }
+        if (durEl) durEl.textContent = (dur / 1000).toFixed(1) + 's';
+    }
 
     let detailHtml = '';
     if (details) {
@@ -317,40 +342,37 @@ function updateStep(card, agent, status, msg, dur, details) {
         if (details.message && details.degraded) lines.push(esc(details.message));
         if (lines.length) detailHtml = lines.join('<br>');
     }
-    if (detailHtml) {
-        let det = li.querySelector('.step-detail');
-        if (!det) { det = document.createElement('div'); det.className = 'step-detail'; li.querySelector('.step-body')?.appendChild(det); }
+
+    const collapse = li.querySelector('.step-collapse');
+    if (detailHtml && collapse) {
+        let det = collapse.querySelector('.step-detail');
+        if (!det) { det = document.createElement('div'); det.className = 'step-detail'; collapse.appendChild(det); }
         det.innerHTML = detailHtml;
+        li.classList.add('has-details');
     }
 
-    if (details && details.flow_sketch_mermaid && typeof window.mermaid !== 'undefined') {
-        let mwrap = li.querySelector('.step-mermaid');
+    if (details && details.flow_sketch_mermaid && typeof window.mermaid !== 'undefined' && collapse) {
+        let mwrap = collapse.querySelector('.step-mermaid');
         if (!mwrap) {
             mwrap = document.createElement('div');
             mwrap.className = 'step-mermaid res-mermaid-wrap mermaid-collapsible';
             mwrap.innerHTML =
                 '<div class="mermaid-toggle-bar">' +
                     '<span class="mermaid-toggle-label">流程图草图</span>' +
-                    '<button class="mermaid-toggle-btn" type="button">收起 ▴</button>' +
+                    '<svg class="mermaid-chevron" width="14" height="14" viewBox="0 0 14 14"><path d="M5.25 2.9l4.1 4.1-4.1 4.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
                 '</div>' +
                 '<div class="mermaid-content"><pre class="mermaid">' + esc(details.flow_sketch_mermaid) + '</pre></div>';
-            li.querySelector('.step-body')?.appendChild(mwrap);
-            mwrap.querySelector('.mermaid-toggle-bar')?.addEventListener('click', function() {
+            collapse.appendChild(mwrap);
+            li.classList.add('has-details');
+            mwrap.querySelector('.mermaid-toggle-bar')?.addEventListener('click', function(e) {
+                e.stopPropagation();
                 mwrap.classList.toggle('collapsed');
-                var btn = mwrap.querySelector('.mermaid-toggle-btn');
-                if (btn) btn.textContent = mwrap.classList.contains('collapsed') ? '展开 ▾' : '收起 ▴';
             });
             var mNodes = mwrap.querySelectorAll('.mermaid');
             if (mNodes.length) {
                 window.mermaid.run({ nodes: mNodes }).catch(function() {});
             }
         }
-    }
-
-    if (dur != null) {
-        let durEl = li.querySelector('.step-dur');
-        if (!durEl) { durEl = document.createElement('span'); durEl.className = 'step-dur'; li.appendChild(durEl); }
-        durEl.textContent = (dur / 1000).toFixed(1) + 's';
     }
 }
 
@@ -457,7 +479,7 @@ function addResult(data) {
         h += '<div class="res-mermaid-wrap mermaid-collapsible">' +
             '<div class="mermaid-toggle-bar">' +
                 '<span class="mermaid-toggle-label">流程图草图</span>' +
-                '<button class="mermaid-toggle-btn" type="button">收起 ▴</button>' +
+                '<svg class="mermaid-chevron" width="14" height="14" viewBox="0 0 14 14"><path d="M5.25 2.9l4.1 4.1-4.1 4.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
             '</div>' +
             '<div class="mermaid-content"><pre class="mermaid">' + esc(data.flow_sketch_mermaid) + '</pre></div>' +
         '</div>';
@@ -489,8 +511,6 @@ function addResult(data) {
         if (mwrap) {
             mwrap.querySelector('.mermaid-toggle-bar')?.addEventListener('click', function() {
                 mwrap.classList.toggle('collapsed');
-                var btn = mwrap.querySelector('.mermaid-toggle-btn');
-                if (btn) btn.textContent = mwrap.classList.contains('collapsed') ? '展开 ▾' : '收起 ▴';
             });
         }
         var mermaidNodes = el.querySelectorAll('.mermaid');

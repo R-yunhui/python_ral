@@ -13,7 +13,7 @@
 
 【工作步骤】
 1. 调用 get_skill_body("bisheng-workflow-generator") 读取完整规范
-2. 若需要更细的字段或节点规范，可调用 get_skill_reference 读取 references 中实际存在的文档（如 field-format-spec、start-node-fields），不要请求不存在的资源
+2. 调用 get_skill_reference 读取 references/node-examples.md 获取各节点完整 JSON 示例；如需字段格式校验可读取 references/field-format-spec.md
 3. 严格遵循规范文档中的规则，生成完整的毕昇工作流 JSON
 4. 调用 validate_workflow 工具校验，如有问题则修复后重新校验
 5. 校验通过后，只输出最终 JSON（```json 代码块），不要输出其他文字
