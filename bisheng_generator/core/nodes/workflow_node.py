@@ -72,12 +72,9 @@ async def run_workflow_generation(
                 )[:200]
                 if attempt < cfg.max_retries_workflow:
                     logger.warning(
-                        "工作流生成重试",
-                        extra={
-                            "attempt": attempt + 1,
-                            "reason": last_error,
-                            "content_preview": content_preview,
-                        },
+                        "工作流生成重试（第 %d 次），原因：%s",
+                        attempt + 1,
+                        last_error,
                     )
                     continue
                 break
@@ -109,20 +106,25 @@ async def run_workflow_generation(
                 return {"error": f"工作流生成失败：{str(e)}"}
             if attempt < cfg.max_retries_workflow:
                 logger.warning(
-                    "工作流生成重试",
-                    extra={"attempt": attempt + 1, "reason": str(e)},
+                    "工作流生成重试（第 %d 次），原因：%s",
+                    attempt + 1,
+                    e,
+                    exc_info=True,
                 )
             else:
                 logger.error(
-                    "工作流生成失败(已用尽重试)",
-                    extra={
-                        "reason": str(e),
-                        "intent_preview": (intent.rewritten_input or "")[:80],
-                    },
+                    "工作流生成失败(已用尽重试)，原因：%s",
+                    e,
+                    exc_info=True,
                 )
 
     duration_ms = (time.time() - start_time) * 1000
     error_msg = last_error or "工作流生成失败"
+    logger.error(
+        "工作流生成节点失败：%s",
+        error_msg,
+        extra={"duration_ms": duration_ms},
+    )
     await ctx.emit_progress(
         ProgressEvent.create_agent_error_event(
             AgentName.WORKFLOW_GENERATION, error_msg, duration_ms

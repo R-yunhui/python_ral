@@ -3,6 +3,26 @@ from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 
 
+class IntentParseResult(BaseModel):
+    """
+    LLM 意图解析的结构化输出（供 with_structured_output 使用）。
+    不含 original_input，由调用方在构建 EnhancedIntent 时注入。
+    """
+    rewritten_input: str = Field(description="重写后的清晰需求描述")
+    needs_tool: bool = Field(default=False, description="是否需要调用工具/API")
+    needs_knowledge: bool = Field(default=False, description="是否需要检索知识库")
+    needs_clarification: bool = Field(default=False, description="是否需向用户澄清后再生成")
+    clarification_questions: List[str] = Field(
+        default_factory=list,
+        description="向用户展示的澄清问题，1~3 条，仅 needs_clarification=true 时有值",
+    )
+    complexity_hint: Literal["simple", "moderate", "full"] = Field(
+        default="moderate",
+        description="复杂度提示，供下游参考",
+    )
+    multi_turn: bool = Field(default=True, description="是否支持多轮对话")
+
+
 class EnhancedIntent(BaseModel):
     """
     增强的意图描述（简化版）

@@ -54,6 +54,8 @@
 }
 ```
 
+**`guide_question` 格式**：value 必须是**纯字符串数组** `["问题 1", "问题 2"]`。平台 GuideQuestionData 校验要求 list[str]，不可使用 `[{"key":"pq_001","value":"..."}]` 对象数组。
+
 **`preset_question` 格式**：value 必须是对象数组 `[{"key": "pq_001", "value": "问题文本"}]`，不是纯字符串数组。
 
 ---

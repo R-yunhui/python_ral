@@ -475,16 +475,7 @@ function addResult(data) {
     h += '<div class="res-meta-item"><span class="res-meta-label">知识库</span><span class="res-meta-val">' + kbCount + ' 个</span></div>';
     h += '</div>';
 
-    if (data.flow_sketch_mermaid && data.flow_sketch_mermaid.trim()) {
-        h += '<div class="res-mermaid-wrap mermaid-collapsible">' +
-            '<div class="mermaid-toggle-bar">' +
-                '<span class="mermaid-toggle-label">流程图草图</span>' +
-                '<svg class="mermaid-chevron" width="14" height="14" viewBox="0 0 14 14"><path d="M5.25 2.9l4.1 4.1-4.1 4.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-            '</div>' +
-            '<div class="mermaid-content"><pre class="mermaid">' + esc(data.flow_sketch_mermaid) + '</pre></div>' +
-        '</div>';
-    }
-
+    // 流程图草图仅在进度步骤「流程图草图完成」中展示一次，此处不再重复展示
     const ir = data.import_result || {};
     const hasChat = ir.chat_url;
     const hasEdit = ir.flow_edit_url;
@@ -506,18 +497,6 @@ function addResult(data) {
     el.querySelector('._cp')?.addEventListener('click', doCopy);
     el.querySelector('._json')?.addEventListener('click', openJsonModal);
     chatMessages.appendChild(el);
-    if (data.flow_sketch_mermaid && typeof window.mermaid !== 'undefined') {
-        var mwrap = el.querySelector('.mermaid-collapsible');
-        if (mwrap) {
-            mwrap.querySelector('.mermaid-toggle-bar')?.addEventListener('click', function() {
-                mwrap.classList.toggle('collapsed');
-            });
-        }
-        var mermaidNodes = el.querySelectorAll('.mermaid');
-        if (mermaidNodes.length) {
-            window.mermaid.run({ nodes: mermaidNodes }).catch(function() {});
-        }
-    }
     scroll();
 }
 

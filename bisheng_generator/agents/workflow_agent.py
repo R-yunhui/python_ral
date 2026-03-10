@@ -39,14 +39,41 @@ _SKILLS_DIR = _REPO_ROOT / "skills"
 _WORKFLOW_DEBUG_DIR = Path(__file__).resolve().parent.parent / "data" / "workflow_debug"
 
 # 工具节点中表示「用户输入/查询条件/地域/时间/关键词」等的参数 key，不应写死为具体值
-_USER_VARIABLE_TOOL_PARAM_KEYS = frozenset({
-    "province", "city", "district", "region", "date", "start_date", "end_date",
-    "keyword", "query", "search_keyword", "company_status", "location", "status",
-    "name", "q", "search", "location_name",
-})
+_USER_VARIABLE_TOOL_PARAM_KEYS = frozenset(
+    {
+        "province",
+        "city",
+        "district",
+        "region",
+        "date",
+        "start_date",
+        "end_date",
+        "keyword",
+        "query",
+        "search_keyword",
+        "company_status",
+        "location",
+        "status",
+        "name",
+        "q",
+        "search",
+        "location_name",
+    }
+)
 
 
 # ─── 程序化校验辅助 ─────────────────────────────────────────────
+
+
+def _collect_strings_from_value(val: Any) -> List[str]:
+    """从可能嵌套的 value（str/dict/list）中收集所有字符串，用于正则扫描变量引用。"""
+    if isinstance(val, str):
+        return [val]
+    if isinstance(val, dict):
+        return [s for v in val.values() for s in _collect_strings_from_value(v)]
+    if isinstance(val, list):
+        return [s for item in val for s in _collect_strings_from_value(item)]
+    return []
 
 
 def _get_branch_reachable(
@@ -76,218 +103,401 @@ def _get_branch_reachable(
     return result
 
 
-def _validate_workflow_impl(
-    workflow: Dict[str, Any], tool_plan: Optional[ToolPlan] = None
-) -> List[str]:
+class WorkflowValidator:
     """
-    程序化校验毕昇工作流 JSON，返回问题列表（空表示通过）。
+    毕升工作流图形与执行引擎双端规则验证器。
+    该类将图形拓扑的校验从原本复杂的大函数中抽取出来，按职责分散为独立的私有方法，
+    以便维护前端图形画布限定与后端执行引擎特征。
     """
-    issues: List[str] = []
-    nodes = workflow.get("nodes") or []
-    edges = workflow.get("edges") or []
-    node_ids = {n.get("id") for n in nodes if n.get("id")}
 
-    # 1. edges 引用的 node 必须存在
-    for e in edges:
-        src, tgt = e.get("source"), e.get("target")
-        if src and src not in node_ids:
-            issues.append(f"边引用了不存在的节点 source: {src}")
-        if tgt and tgt not in node_ids:
-            issues.append(f"边引用了不存在的节点 target: {tgt}")
+    def __init__(
+        self,
+        workflow: Dict[str, Any],
+        tool_plan: Optional[ToolPlan] = None,
+        knowledge_match: Optional[KnowledgeMatch] = None,
+    ):
+        self.workflow = workflow
+        self.tool_plan = tool_plan
+        self.knowledge_match = knowledge_match
+        self.issues: List[str] = []
 
-    # 2. 必须有 start、input 基础节点；output 在有 output_user=true 的 LLM 时可选
-    types_seen = {n.get("data", {}).get("type") for n in nodes}
-    for required in ("start", "input"):
-        if required not in types_seen:
-            issues.append(f"缺少必需节点类型: {required}")
-    has_output_user = any(
-        p.get("key") == "output_user" and p.get("value") is True
-        for n in nodes if n.get("data", {}).get("type") == "llm"
-        for grp in n.get("data", {}).get("group_params", [])
-        for p in grp.get("params", [])
-    )
-    if "output" not in types_seen and not has_output_user:
-        issues.append("缺少 output 节点且没有 LLM 设置 output_user=true")
+        self.nodes = self.workflow.get("nodes") or []
+        self.edges = self.workflow.get("edges") or []
+        self.node_ids = {n.get("id") for n in self.nodes if n.get("id")}
 
-    valid_tool_keys: set = set()
-    if tool_plan and tool_plan.selected_tools:
-        valid_tool_keys = {t.tool_key for t in tool_plan.selected_tools}
+        # 建立边映射，查出边和入边，避免高时间复杂度计算
+        self.edges_from = {nid: [] for nid in self.node_ids}
+        self.edges_to = {nid: [] for nid in self.node_ids}
+        for e in self.edges:
+            src, tgt = e.get("source"), e.get("target")
+            if src in self.edges_from:
+                self.edges_from[src].append(e)
+            if tgt in self.edges_to:
+                self.edges_to[tgt].append(e)
 
-    # 3. 每个 tool 节点：tool_key 必须在候选内
-    tool_node_ids = []
-    for node in nodes:
-        data = node.get("data", {})
-        if data.get("type") != "tool":
-            continue
-        nid = node.get("id", "")
-        tool_node_ids.append(nid)
-        tk = data.get("tool_key", "")
-        if valid_tool_keys and tk and tk not in valid_tool_keys:
-            issues.append(
-                f"工具节点 {nid} 的 tool_key '{tk}' 不在候选列表中，"
-                "必须与候选工具的 tool_key 完全一致（含 MCP 后缀）"
-            )
+        # 缓存节点 ID 和类型的速查字典
+        self.node_type_map = {
+            n.get("id"): n.get("data", {}).get("type", "")
+            for n in self.nodes
+            if n.get("id")
+        }
 
-    # 4. 每个 tool 节点的输出应被至少一个 LLM 节点引用（禁止死分支）
-    llm_refs = set()
-    for node in nodes:
-        data = node.get("data", {})
-        if data.get("type") != "llm":
-            continue
-        for grp in data.get("group_params", []):
-            for p in grp.get("params", []):
-                val = p.get("value")
-                if not isinstance(val, str):
-                    continue
-                for m in re.finditer(r"#(tool_[a-zA-Z0-9_]+)\.output#", val):
-                    llm_refs.add(m.group(1))
-    for tid in tool_node_ids:
-        if tid and tid not in llm_refs:
-            issues.append(
-                f"工具节点 {tid} 的输出未被任何 LLM 节点引用（禁止死分支），"
-                "请在至少一个 LLM 节点的输入中使用 {{#" + tid + ".output#}}"
-            )
+    def validate(self) -> List[str]:
+        """运行所有验证规则，收集全部的缺陷并返回。空列表代表无缺陷。"""
+        self.issues.clear()
 
-    # 5. 检测非法的 LLM 输出子属性引用
-    llm_node_ids = {
-        n.get("id") for n in nodes
-        if n.get("data", {}).get("type") == "llm" and n.get("id")
-    }
-    for node in nodes:
-        data = node.get("data", {})
-        for grp in data.get("group_params", []):
-            for p in grp.get("params", []):
-                val = p.get("value")
-                if not isinstance(val, str):
-                    continue
-                for m in re.finditer(
-                    r"\{\{#(llm_[a-zA-Z0-9_]+)\.output\.(\w+)#\}\}", val
-                ):
-                    llm_id, field = m.group(1), m.group(2)
-                    if llm_id in llm_node_ids:
-                        issues.append(
-                            f"节点 {node.get('id')} 非法引用了 LLM 子属性 "
-                            f"{{{{#{llm_id}.output.{field}#}}}}，"
-                            "毕昇不支持直接获取 LLM 输出 JSON 的内部字段。"
-                            f"请插入 Code 代码节点解析 {llm_id}.output，"
-                            f"然后通过 {{{{#code_xxx.{field}#}}}} 引用"
-                        )
+        self._check_graph_integrity()
+        self._check_tool_nodes()
+        self._check_no_knowledge_when_empty()
+        self._check_llm_nodes()
+        self._check_condition_branches()
+        self._check_knowledge_retriever()
+        self._check_code_nodes()
+        self._check_frontend_strict_rules()
 
-    # 6. 检测 Condition 互斥分支汇聚到同一下游节点（会导致流程卡死）
-    node_type_map = {
-        n.get("id"): n.get("data", {}).get("type", "")
-        for n in nodes if n.get("id")
-    }
-    condition_node_ids = {
-        nid for nid, nt in node_type_map.items() if nt == "condition"
-    }
-    for cond_id in condition_node_ids:
-        cond_out_edges = [
-            e for e in edges if e.get("source") == cond_id
+        return self.issues
+
+    def _check_graph_integrity(self):
+        """规则 1 & 2: 校验图的基础节点合法性和边引用"""
+        # 1. edges 引用的 node 必须存在
+        for e in self.edges:
+            src, tgt = e.get("source"), e.get("target")
+            if src and src not in self.node_ids:
+                self.issues.append(f"边引用了不存在的节点 source: {src}")
+            if tgt and tgt not in self.node_ids:
+                self.issues.append(f"边引用了不存在的节点 target: {tgt}")
+
+        # 2. 基础节点类型校验
+        types_seen = set(self.node_type_map.values())
+        for required in ("start", "input"):
+            if required not in types_seen:
+                self.issues.append(f"缺少必需节点类型: {required}")
+
+        has_output_user = any(
+            p.get("key") == "output_user" and p.get("value") is True
+            for n in self.nodes
+            if n.get("data", {}).get("type") == "llm"
+            for grp in n.get("data", {}).get("group_params", [])
+            for p in grp.get("params", [])
+        )
+        if "output" not in types_seen and not has_output_user:
+            self.issues.append("缺少 output 节点且没有 LLM 设置 output_user=true")
+
+    def _check_tool_nodes(self):
+        """规则 3, 4 & 9: 校验工具节点的限定、硬编码检查与死分支排查"""
+        valid_tool_keys: set = set()
+        if self.tool_plan and self.tool_plan.selected_tools:
+            valid_tool_keys = {t.tool_key for t in self.tool_plan.selected_tools}
+
+        tool_node_ids = [
+            n.get("id", "")
+            for n in self.nodes
+            if n.get("data", {}).get("type") == "tool"
         ]
-        if len(cond_out_edges) < 2:
-            continue
-        branch_sets: List[set] = []
-        for e in cond_out_edges:
-            target = e.get("target", "")
-            if not target:
-                continue
-            reachable = _get_branch_reachable(target, edges, node_type_map)
-            branch_sets.append(reachable)
-        reported: set = set()
-        for i in range(len(branch_sets)):
-            for j in range(i + 1, len(branch_sets)):
-                common = branch_sets[i] & branch_sets[j]
-                for nid in common:
-                    if nid not in reported:
-                        reported.add(nid)
-                        issues.append(
-                            f"条件节点 {cond_id} 的多个互斥分支汇聚到了同一节点 {nid}，"
-                            "条件分支互斥执行，未执行分支不会产生输出，"
-                            "汇聚节点会因等待而卡死。"
-                            "请让每个分支独立闭环（LLM output_user=true 连回 Input）"
-                        )
-
-    # 7. 检测 knowledge_retriever 输出引用错误（用了 retrieved_result 而非 retrieved_output）
-    kr_node_ids = {
-        n.get("id") for n in nodes
-        if n.get("data", {}).get("type") == "knowledge_retriever" and n.get("id")
-    }
-    for node in nodes:
-        data = node.get("data", {})
-        for grp in data.get("group_params", []):
-            for p in grp.get("params", []):
-                val = p.get("value")
-                if not isinstance(val, str):
-                    if isinstance(val, dict):
-                        val = val.get("msg", "")
-                    else:
-                        continue
-                for kr_id in kr_node_ids:
-                    if f"{{{{#{kr_id}.retrieved_result#}}}}" in val:
-                        issues.append(
-                            f"节点 {node.get('id')} 错误引用了 "
-                            f"{{{{#{kr_id}.retrieved_result#}}}}，"
-                            f"retrieved_result 是输出组名，不是变量名。"
-                            f"请改为 {{{{#{kr_id}.retrieved_output#}}}}"
-                        )
-
-    # 8. 检测 Code 节点代码是否包含基本容错
-    for node in nodes:
-        data = node.get("data", {})
-        if data.get("type") != "code":
-            continue
-        nid = node.get("id", "")
-        code_value = ""
-        has_parse_ok = False
-        for grp in data.get("group_params", []):
-            for p in grp.get("params", []):
-                if p.get("key") == "code" and isinstance(p.get("value"), str):
-                    code_value = p["value"]
-                if p.get("key") == "code_output":
-                    output_keys = [
-                        item.get("key", "")
-                        for item in (p.get("value") or [])
-                        if isinstance(item, dict)
-                    ]
-                    if "parse_ok" in output_keys:
-                        has_parse_ok = True
-        if "json.loads" in code_value and "except" not in code_value:
-            issues.append(
-                f"代码节点 {nid} 使用了 json.loads 但缺少 try-except 容错。"
-                "JSON 解析失败时工作流将崩溃，请添加异常处理并返回安全默认值"
+        # 无候选工具时不得包含任何 tool 节点（禁止编造工具）
+        if not valid_tool_keys and tool_node_ids:
+            self.issues.append(
+                "无候选工具时不得包含任何 tool 节点（禁止编造工具）。"
+                "请移除所有 type 为 tool 的节点，改为纯 LLM 流程（若需求涉及外部能力，请描述为「当前无可用工具，仅用 LLM 回答」）。"
             )
-        if "json.loads" in code_value and not has_parse_ok:
-            issues.append(
-                f"代码节点 {nid} 执行 JSON 解析但未输出 parse_ok 决策标志。"
-                "请在 code_output 中添加 parse_ok 字段，"
-                "供下游 Condition 节点判断解析是否成功"
-            )
+            return
 
-    # 9. 检测工具节点中用户/查询类参数被写死为具体值（应留空或绑定变量）
-    for node in nodes:
-        data = node.get("data", {})
-        if data.get("type") != "tool":
-            continue
-        nid = node.get("id", "")
-        for grp in data.get("group_params", []):
-            if grp.get("name") != "工具参数":
+        for node in self.nodes:
+            data = node.get("data", {})
+            if data.get("type") != "tool":
                 continue
-            for p in grp.get("params", []):
-                key = p.get("key", "")
-                if key not in _USER_VARIABLE_TOOL_PARAM_KEYS:
-                    continue
-                val = p.get("value")
-                if not isinstance(val, str) or not val.strip():
-                    continue
-                if "{{#" in val:
-                    continue
-                issues.append(
-                    f"工具节点 {nid} 的参数 '{key}' 不应写死为具体值 \"{val[:30]}{'...' if len(val) > 30 else ''}\"，"
-                    "此类参数应留空或绑定到输入/上游变量（如 {{#input_xxx.user_input#}}、{{#code_xxx.字段#}}）"
+            nid = node.get("id", "")
+            tk = data.get("tool_key", "")
+            if valid_tool_keys and tk and tk not in valid_tool_keys:
+                self.issues.append(
+                    f"工具节点 {nid} 的 tool_key '{tk}' 不在候选列表中，"
+                    "必须与候选工具的 tool_key 完全一致（含 MCP 后缀）"
                 )
 
-    return issues
+            # 检测工具节点中用户类参数是否被写死
+            for grp in data.get("group_params", []):
+                if grp.get("name") != "工具参数":
+                    continue
+                for p in grp.get("params", []):
+                    key = p.get("key", "")
+                    if key not in _USER_VARIABLE_TOOL_PARAM_KEYS:
+                        continue
+                    val = p.get("value")
+                    if not isinstance(val, str) or not val.strip():
+                        continue
+                    if "{{#" in val:
+                        continue
+                    self.issues.append(
+                        f"工具节点 {nid} 的参数 '{key}' 不应写死为具体值 \"{val[:30]}{'...' if len(val) > 30 else ''}\"，"
+                        "此类参数应留空或绑定到输入/上游变量（如 {{#input_xxx.user_input#}}、{{#code_xxx.字段#}}）"
+                    )
+
+        # 每个 tool 节点的输出必须被至少一个下游节点引用（LLM、Code 等均可）
+        # 匹配任意节点 id 的 .output 引用（不限定 tool_ 前缀），与图中实际 tool 节点 id 一致即可
+        tool_node_id_set = set(tool_node_ids)
+        tool_output_refs = set()
+        for node in self.nodes:
+            for grp in node.get("data", {}).get("group_params", []):
+                for p in grp.get("params", []):
+                    val = p.get("value")
+                    for s in _collect_strings_from_value(val):
+                        for m in re.finditer(r"#([a-zA-Z0-9_]+)\.output#", s):
+                            ref_id = m.group(1)
+                            if ref_id in tool_node_id_set:
+                                tool_output_refs.add(ref_id)
+        for tid in tool_node_ids:
+            if tid and tid not in tool_output_refs:
+                node_name = ""
+                for n in self.nodes:
+                    if n.get("id") == tid:
+                        node_name = n.get("data", {}).get("name", "") or ""
+                        break
+                name_part = f"（名称：{node_name}）" if node_name else ""
+                self.issues.append(
+                    f"工具节点 {tid}{name_part} 的输出未被任何下游节点引用（禁止死分支）。"
+                    f"请在至少一个下游节点（如 LLM、Code）的输入中使用 {{{{#{tid}.output#}}}}。"
+                )
+
+    def _check_no_knowledge_when_empty(self):
+        """无匹配知识库时不得包含任何 knowledge_retriever 节点（禁止编造知识库）"""
+        if self.knowledge_match is None:
+            return
+        if self.knowledge_match.matched_knowledge_bases:
+            return
+        kr_ids = [
+            nid for nid, nt in self.node_type_map.items() if nt == "knowledge_retriever"
+        ]
+        if not kr_ids:
+            return
+        self.issues.append(
+            "无匹配知识库时不得包含任何 knowledge_retriever 节点（禁止编造知识库）。"
+            "请移除所有知识库检索节点，改为纯 LLM/工具 流程。"
+        )
+
+    def _check_llm_nodes(self):
+        """规则 5: 检测非法的大模型输出子属性引用 {{#llm_x.output.y#}}"""
+        llm_node_ids = {nid for nid, nt in self.node_type_map.items() if nt == "llm"}
+
+        for node in self.nodes:
+            for grp in node.get("data", {}).get("group_params", []):
+                for p in grp.get("params", []):
+                    val = p.get("value")
+                    if not isinstance(val, str):
+                        continue
+                    for m in re.finditer(
+                        r"\{\{#(llm_[a-zA-Z0-9_]+)\.output\.(\w+)#\}\}", val
+                    ):
+                        llm_id, field = m.group(1), m.group(2)
+                        if llm_id in llm_node_ids:
+                            self.issues.append(
+                                f"节点 {node.get('id')} 非法引用了 LLM 子属性 "
+                                f"{{{{#{llm_id}.output.{field}#}}}}，"
+                                "毕昇不支持直接获取 LLM 输出 JSON 的内部字段。"
+                                f"请插入 Code 代码节点解析 {llm_id}.output，"
+                                f"然后通过 {{{{#code_xxx.{field}#}}}} 引用"
+                            )
+
+    def _check_condition_branches(self):
+        """规则 6: 检测 Condition 互斥分支汇聚，防止后端图执行引擎死等卡死"""
+        condition_node_ids = {
+            nid for nid, nt in self.node_type_map.items() if nt == "condition"
+        }
+
+        for cond_id in condition_node_ids:
+            cond_out_edges = self.edges_from.get(cond_id, [])
+            if len(cond_out_edges) < 2:
+                continue
+
+            branch_sets: List[set] = []
+            for e in cond_out_edges:
+                target = e.get("target", "")
+                if not target:
+                    continue
+                reachable = _get_branch_reachable(
+                    target, self.edges, self.node_type_map
+                )
+                branch_sets.append(reachable)
+
+            reported: set = set()
+            for i in range(len(branch_sets)):
+                for j in range(i + 1, len(branch_sets)):
+                    common = branch_sets[i] & branch_sets[j]
+                    for nid in common:
+                        if nid not in reported:
+                            reported.add(nid)
+                            self.issues.append(
+                                f"条件节点 {cond_id} 的多个互斥分支汇聚到了同一节点 {nid}，"
+                                "条件分支互斥执行，未执行分支不会产生输出，"
+                                "汇聚节点会因等待而卡死。"
+                                "请让每个分支独立闭环（LLM output_user=true 连回 Input）"
+                            )
+
+    def _check_knowledge_retriever(self):
+        """规则 7: 检测 knowledge_retriever 输出引用变量名拼写错误"""
+        kr_node_ids = {
+            nid for nid, nt in self.node_type_map.items() if nt == "knowledge_retriever"
+        }
+
+        for node in self.nodes:
+            for grp in node.get("data", {}).get("group_params", []):
+                for p in grp.get("params", []):
+                    val = p.get("value")
+                    if not isinstance(val, str):
+                        if isinstance(val, dict):
+                            val = val.get("msg", "")
+                        else:
+                            continue
+
+                    for kr_id in kr_node_ids:
+                        if f"{{{{#{kr_id}.retrieved_result#}}}}" in val:
+                            self.issues.append(
+                                f"节点 {node.get('id')} 错误引用了 "
+                                f"{{{{#{kr_id}.retrieved_result#}}}}，"
+                                f"retrieved_result 是输出组名，不是变量名。"
+                                f"请改为 {{{{#{kr_id}.retrieved_output#}}}}"
+                            )
+
+    def _check_code_nodes(self):
+        """规则 8: 检测 Code 节点 json 序列化的基本容错"""
+        for node in self.nodes:
+            data = node.get("data", {})
+            if data.get("type") != "code":
+                continue
+            nid = node.get("id", "")
+            code_value = ""
+            has_parse_ok = False
+
+            for grp in data.get("group_params", []):
+                for p in grp.get("params", []):
+                    if p.get("key") == "code" and isinstance(p.get("value"), str):
+                        code_value = p["value"]
+                    if p.get("key") == "code_output":
+                        output_keys = [
+                            item.get("key", "")
+                            for item in (p.get("value") or [])
+                            if isinstance(item, dict)
+                        ]
+                        if "parse_ok" in output_keys:
+                            has_parse_ok = True
+
+            if "json.loads" in code_value and "except" not in code_value:
+                self.issues.append(
+                    f"代码节点 {nid} 使用了 json.loads 但缺少 try-except 容错。"
+                    "JSON 解析失败时工作流将崩溃，请添加异常处理并返回安全默认值"
+                )
+            if "json.loads" in code_value and not has_parse_ok:
+                self.issues.append(
+                    f"代码节点 {nid} 执行 JSON 解析但未输出 parse_ok 决策标志。"
+                    "请在 code_output 中添加 parse_ok 字段，"
+                    "供下游 Condition 节点判断解析是否成功"
+                )
+
+    def _check_frontend_strict_rules(self):
+        """
+        对齐前端 Header.tsx 中 traverseTree 的遍历逻辑：
+        - 从 start 节点出发 DFS
+        - 遇到 end 节点 → 该分支合法结束
+        - 遇到已访问过的节点（回环，如 LLM→Input 多轮对话）→ 该分支合法结束
+        - 遇到没有出边的非 end 节点 → 断头路，报 missingEndNode 错误
+        - 所有 flowNode 类型的节点必须从 start 可达，否则报 unconnectedNodes
+        - Condition 节点所有触点（含 right_handle）必须有出边
+        """
+
+        # ── 1. 从 start 出发做 DFS，模拟 traverseTree ──
+        start_node_id = None
+        for nid, nt in self.node_type_map.items():
+            if nt == "start":
+                start_node_id = nid
+                break
+
+        if not start_node_id:
+            return  # _check_graph_integrity 已经会报缺少 start
+
+        # 找到 start 的第一条出边的 target 作为遍历起点（与前端一致）
+        start_edges = self.edges_from.get(start_node_id, [])
+        if not start_edges:
+            self.issues.append(
+                "开始节点(start)没有连接任何下游节点，前端会报「缺少结束节点」。请连接 start → input。"
+            )
+            return
+
+        visited: set = set()  # 已经访问过的节点
+        reachable: set = set()  # 从 start 可达的全部节点
+        dead_ends: List[str] = []  # 断头路节点
+
+        def dfs(node_id: str):
+            """DFS 遍历，模拟前端 traverseTree 的终止判定"""
+            if node_id in visited:
+                return  # 回环 → 合法终止
+            visited.add(node_id)
+            reachable.add(node_id)
+
+            ntype = self.node_type_map.get(node_id, "")
+            if ntype == "end":
+                return  # end 节点 → 合法终止
+
+            out_edges = self.edges_from.get(node_id, [])
+            if not out_edges:
+                # 没有出边且不是 end → 断头路
+                dead_ends.append(node_id)
+                return
+
+            for e in out_edges:
+                target = e.get("target", "")
+                if target:
+                    dfs(target)
+
+        # 从 start 节点开始遍历
+        dfs(start_node_id)
+
+        # ── 2. 断头路报错（对齐前端 missingEndNode）──
+        for nid in dead_ends:
+            ntype = self.node_type_map.get(nid, "")
+            self.issues.append(
+                f"节点 '{nid}'(类型: {ntype}) 是断头路（没有出边且不形成回环）。"
+                "默认多轮对话模式要求每条分支必须回环到 Input 节点形成对话闭环。"
+                "请让该节点通过 LLM(output_user=true) 连回 Input 节点。"
+            )
+
+        # ── 3. 孤立节点报错（对齐前端 unconnectedNodes）──
+        all_flow_node_ids = {
+            nid
+            for nid, nt in self.node_type_map.items()
+            if nt not in ("",)  # 排除无效节点
+        }
+        unreachable = all_flow_node_ids - reachable
+        if unreachable:
+            self.issues.append(
+                f"以下节点无法从 start 节点到达（孤立飞地）：{', '.join(sorted(unreachable))}。"
+                "前端要求所有节点必须可从 start 遍历到达，请补充连线或删除多余节点。"
+            )
+
+        # ── 4. Condition 触点全连校验（独立于 DFS，前端单独校验）──
+        for node in self.nodes:
+            data = node.get("data", {})
+            if data.get("type") != "condition":
+                continue
+            nid = node.get("id", "")
+            required_handles = ["right_handle"]  # 右侧兜底触点必须有连线
+
+            for grp in data.get("group_params", []):
+                if grp.get("name") == "条件分支":
+                    for p in grp.get("params", []):
+                        if p.get("key") == "condition":
+                            cond_items = p.get("value") or []
+                            for item in cond_items:
+                                required_handles.append(item.get("id"))
+
+            for handle in required_handles:
+                has_edge = any(
+                    e.get("source") == nid and e.get("sourceHandle") == handle
+                    for e in self.edges
+                )
+                if not has_edge:
+                    self.issues.append(
+                        f"条件节点 '{nid}' 的触点 '{handle}' 没有连接下游节点。"
+                        f"（前端强制校验：即使该条件分支什么都不做，也必须通过 LLM(output_user=true) 回环连回 Input 节点，不允许挂空）"
+                    )
 
 
 # ─── Agent 类 ──────────────────────────────────────────────────
@@ -359,21 +569,17 @@ class WorkflowAgent:
         )
         if flow_sketch and isinstance(flow_sketch.get("nodes"), list):
             import json as _json
-            sketch_json = _json.dumps(
-                flow_sketch, ensure_ascii=False, indent=2
-            )
+
+            sketch_json = _json.dumps(flow_sketch, ensure_ascii=False, indent=2)
             task_prompt = (
-                task_prompt
-                + "\n\n【必须遵守的流程图草图】\n"
+                task_prompt + "\n\n【必须遵守的流程图草图】\n"
                 "以下为已确定的流程图结构（nodes 与 edges），请严格按此结构生成完整毕昇工作流 JSON："
                 "不得合并、省略或新增草图以外的分支，不得改变节点类型与连线关系。\n\n"
                 f"{sketch_json}\n"
             )
 
         system_prompt = (
-            f"{task_prompt}\n\n"
-            f"{self._catalog}\n\n"
-            f"{self._instructions}"
+            f"{task_prompt}\n\n" f"{self._catalog}\n\n" f"{self._instructions}"
         )
 
         # 仅使用 skill 工具（get_skill_body、get_skill_reference 等）；校验在生成后由程序化 _validate_workflow_impl + 修复轮完成，避免 agent 在对话中反复调用校验工具导致变慢
@@ -400,9 +606,7 @@ class WorkflowAgent:
             "callbacks": [usage_cb],
         }
 
-        logger.info(
-            "开始生成工作流（agent-skills 模式，tools=%d）", len(all_tools)
-        )
+        logger.info("开始生成工作流（agent-skills 模式，tools=%d）", len(all_tools))
 
         # ── 第一轮：用 astream_events 便于记录中间过程（skill/工具调用），并从同一流中取最终结果 ──
         final_content = None
@@ -420,7 +624,8 @@ class WorkflowAgent:
                 logger.info(
                     "[workflow_agent] Skill/工具开始 name=%s input=%s",
                     tool_name,
-                    str(tool_input)[:200] + ("..." if len(str(tool_input)) > 200 else ""),
+                    str(tool_input)[:200]
+                    + ("..." if len(str(tool_input)) > 200 else ""),
                 )
             # 中间过程：工具/Skill 调用结束
             elif kind == "on_tool_end":
@@ -456,14 +661,21 @@ class WorkflowAgent:
 
         # ── 安全兜底：程序化校验 + 修复循环 ──
         for fix_round in range(self.MAX_FIX_ROUNDS):
-            issues = _validate_workflow_impl(workflow_json, tool_plan)
+            try:
+                validator = WorkflowValidator(workflow_json, tool_plan, knowledge_match)
+                issues = validator.validate()
+            except Exception as e:
+                logger.warning("Agent 校验时发生错误：%s", e)
+                issues = [f"JSON 结构异常导致校验抛出系统错误：{e}"]
+
             if not issues:
                 logger.info("最终校验通过（第 %d 轮）", fix_round + 1)
                 break
 
             logger.info(
                 "最终校验发现 %d 个问题（第 %d 轮），通过 agent 修复",
-                len(issues), fix_round + 1,
+                len(issues),
+                fix_round + 1,
             )
             for idx, issue in enumerate(issues, 1):
                 logger.info("  校验问题 %d: %s", idx, issue)
@@ -472,6 +684,13 @@ class WorkflowAgent:
                 + "\n".join(f"- {i}" for i in issues)
                 + "\n\n请输出修复后的完整工作流 JSON（```json 代码块）。"
             )
+            # 若有「工具节点输出未被引用」类问题，追加正确写法提示，便于一次改对
+            if any("的输出未被任何下游节点引用" in i for i in issues):
+                fix_prompt += (
+                    "\n\n【正确写法】请在某个下游节点（如 LLM 或 Code）的 group_params 中，"
+                    "在提示词/输入类参数的 value 里加入对应工具节点的引用，例如 {{#工具节点ID.output#}}，"
+                    "且工具节点 ID 须与 nodes 中该工具节点的 id 完全一致。"
+                )
 
             result = await agent.ainvoke(
                 {"messages": [{"role": "user", "content": fix_prompt}]},
@@ -486,9 +705,7 @@ class WorkflowAgent:
                 break
 
             workflow_json = self._normalize_workflow(fixed_json, tool_plan)
-            self._write_debug_round(
-                debug_dir, f"round_{fix_round + 2}", workflow_json
-            )
+            self._write_debug_round(debug_dir, f"round_{fix_round + 2}", workflow_json)
 
         self._write_debug_round(debug_dir, "final", workflow_json)
         logger.info(
@@ -656,6 +873,18 @@ class WorkflowAgent:
                     )
                 elif not isinstance(v, str):
                     p["value"] = str(v) if v is not None else ""
+            elif (
+                p.get("key") == "guide_question"
+                and pt == "input_list"
+                and isinstance(v, list)
+                and v
+                and isinstance(v[0], dict)
+            ):
+                # 平台 GuideQuestionData 要求 guide_question 为字符串数组，非 {key,value} 对象数组
+                p["value"] = [
+                    x.get("value", "") if isinstance(x, dict) else str(x)
+                    for x in v
+                ]
             return
 
         g = p.get("global", "")
@@ -697,39 +926,45 @@ class WorkflowAgent:
     def _ensure_knowledge_retriever_params(self, params: List[Dict[str, Any]]) -> None:
         keys = [x.get("key") for x in params]
         if "metadata_filter" not in keys:
-            params.append({
-                "key": "metadata_filter",
-                "type": "metadata_filter",
-                "label": "true",
-                "value": {"enabled": False},
-            })
+            params.append(
+                {
+                    "key": "metadata_filter",
+                    "type": "metadata_filter",
+                    "label": "true",
+                    "value": {"enabled": False},
+                }
+            )
         if "advanced_retrieval_switch" not in keys:
-            params.append({
-                "key": "advanced_retrieval_switch",
-                "type": "search_switch",
-                "label": "true",
-                "value": {
-                    "keyword_weight": 0.4,
-                    "vector_weight": 0.6,
-                    "user_auth": False,
-                    "search_switch": True,
-                    "rerank_flag": False,
-                    "rerank_model": "",
-                    "max_chunk_size": 15000,
-                },
-            })
+            params.append(
+                {
+                    "key": "advanced_retrieval_switch",
+                    "type": "search_switch",
+                    "label": "true",
+                    "value": {
+                        "keyword_weight": 0.4,
+                        "vector_weight": 0.6,
+                        "user_auth": False,
+                        "search_switch": True,
+                        "rerank_flag": False,
+                        "rerank_model": "",
+                        "max_chunk_size": 15000,
+                    },
+                }
+            )
 
     def _ensure_llm_model_params(self, params: List[Dict[str, Any]]) -> None:
         keys = [x.get("key") for x in params]
         if "temperature" not in keys:
-            params.append({
-                "key": "temperature",
-                "step": 0.1,
-                "type": "slide",
-                "label": "true",
-                "scope": [0, 2],
-                "value": 0.3,
-            })
+            params.append(
+                {
+                    "key": "temperature",
+                    "step": 0.1,
+                    "type": "slide",
+                    "label": "true",
+                    "scope": [0, 2],
+                    "value": 0.3,
+                }
+            )
 
     def _normalize_code_node(self, data: Dict[str, Any]) -> None:
         data.setdefault("expand", True)
@@ -740,37 +975,50 @@ class WorkflowAgent:
         grp_names = [g.get("name", "") for g in grps]
 
         if "入参" not in grp_names:
-            grps.insert(0, {
-                "name": "入参",
-                "params": [{
-                    "key": "code_input",
-                    "test": "input",
-                    "type": "code_input",
-                    "value": [],
-                    "required": True,
-                }],
-            })
+            grps.insert(
+                0,
+                {
+                    "name": "入参",
+                    "params": [
+                        {
+                            "key": "code_input",
+                            "test": "input",
+                            "type": "code_input",
+                            "value": [],
+                            "required": True,
+                        }
+                    ],
+                },
+            )
         if "执行代码" not in grp_names:
-            grps.append({
-                "name": "执行代码",
-                "params": [{
-                    "key": "code",
-                    "type": "code",
-                    "value": "def main() -> dict:\n    return {}",
-                    "required": True,
-                }],
-            })
+            grps.append(
+                {
+                    "name": "执行代码",
+                    "params": [
+                        {
+                            "key": "code",
+                            "type": "code",
+                            "value": "def main() -> dict:\n    return {}",
+                            "required": True,
+                        }
+                    ],
+                }
+            )
         if "出参" not in grp_names:
-            grps.append({
-                "name": "出参",
-                "params": [{
-                    "key": "code_output",
-                    "type": "code_output",
-                    "value": [],
-                    "global": "code:value.map(el => ({ label: el.key, value: el.key }))",
-                    "required": True,
-                }],
-            })
+            grps.append(
+                {
+                    "name": "出参",
+                    "params": [
+                        {
+                            "key": "code_output",
+                            "type": "code_output",
+                            "value": [],
+                            "global": "code:value.map(el => ({ label: el.key, value: el.key }))",
+                            "required": True,
+                        }
+                    ],
+                }
+            )
 
         for grp in grps:
             for p in grp.get("params", []):
@@ -814,7 +1062,9 @@ class WorkflowAgent:
                 fixed_key = base_to_full[current_key]
                 logger.warning(
                     "修复 tool_key：%s -> %s (node=%s)",
-                    current_key, fixed_key, node.get("id"),
+                    current_key,
+                    fixed_key,
+                    node.get("id"),
                 )
                 data["tool_key"] = fixed_key
 
@@ -915,9 +1165,7 @@ class WorkflowAgent:
             ]
             response = await self.llm.ainvoke(messages)
             content = (
-                response.content
-                if hasattr(response, "content")
-                else str(response)
+                response.content if hasattr(response, "content") else str(response)
             )
             sketch = extract_json(content)
             if not sketch or not isinstance(sketch, dict):
@@ -926,9 +1174,7 @@ class WorkflowAgent:
             nodes = sketch.get("nodes")
             edges = sketch.get("edges")
             if not isinstance(nodes, list) or not isinstance(edges, list):
-                logger.warning(
-                    "流程图草图格式错误：缺少 nodes 或 edges 数组"
-                )
+                logger.warning("流程图草图格式错误：缺少 nodes 或 edges 数组")
                 return None
             logger.info(
                 "流程图草图生成完成，nodes=%d, edges=%d",

@@ -33,8 +33,9 @@
 3. 若需求只有「查政策」：分支上为 knowledge_retriever → llm（解读）→ 回到 input 或结束。
 4. 若需求只有「查企业」：分支上为 tool → llm（整理）→ 回到 input 或结束。
 5. condition 的出边每条对应一个 branch，branch 名要有语义（如 policy_branch、company_branch、policy_company_match_branch）。
-6. 多轮对话时，末端 llm 节点应连回 input。
-7. 不要输出 group_params、prompt 内容等细节，只输出 nodes 和 edges。
+6. **条件节点各分支不得汇聚到同一节点**（会卡死）；每个分支应独立连到该分支内的节点（如 llm），再让该节点连回 input。
+7. 多轮对话时，末端 llm 节点应连回 input。
+8. 不要输出 group_params、prompt 内容等细节，只输出 nodes 和 edges。
 
 【当前上下文】
 {user_analysis}

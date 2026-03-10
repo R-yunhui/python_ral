@@ -102,8 +102,8 @@ def extract_json(content: str) -> Optional[Dict[str, Any]]:
     # 1. 尝试直接解析
     try:
         return json.loads(content.strip())
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        logger.debug("直接解析 JSON 失败: %s", e)
 
     # 2. 尝试正则提取代码块
     # 优先匹配 ```json ... ```
@@ -126,7 +126,7 @@ def extract_json(content: str) -> Optional[Dict[str, Any]]:
         if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
             json_str = content[start_idx : end_idx + 1]
             return json.loads(json_str)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("从首尾括号提取 JSON 失败: %s", e)
 
     return None

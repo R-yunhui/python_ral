@@ -106,15 +106,19 @@ async def run_knowledge_matching(
             if attempt == cfg.max_retries_knowledge:
                 break
             logger.warning(
-                "知识库匹配重试",
-                extra={"attempt": attempt + 1, "reason": str(e)},
+                "知识库匹配重试（第 %d 次），原因：%s",
+                attempt + 1,
+                e,
+                exc_info=True,
             )
 
     duration_ms = (time.time() - start_time) * 1000
     logger.warning(
-        "知识库匹配降级：返回空知识库列表",
-        extra={"reason": str(last_error) if last_error else "unknown"},
+        "知识库匹配降级：返回空知识库列表，原因：%s",
+        last_error if last_error is not None else "未知",
     )
+    if last_error is not None and isinstance(last_error, Exception):
+        logger.debug("知识库匹配降级异常详情", exc_info=last_error)
     await ctx.emit_progress(
         ProgressEvent.create_agent_complete_event(
             AgentName.KNOWLEDGE_MATCHING,

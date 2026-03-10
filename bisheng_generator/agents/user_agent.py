@@ -6,6 +6,8 @@
 2. 判断需要哪些功能（工具/知识库/条件/报告）
 3. 生成 EnhancedIntent
 4. 判断是否需要向用户澄清（保守原则）
+
+使用普通 LLM 调用 + 从返回文本解析 JSON，兼容不支持结构化输出的模型。
 """
 
 import logging
@@ -13,119 +15,14 @@ from typing import Dict, List, Optional
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from models.intent import EnhancedIntent
-from core.utils import extract_json
+from langchain_core.output_parsers import StrOutputParser
+from pydantic import ValidationError
+from models.intent import EnhancedIntent, IntentParseResult
 from core.prompt_loader import get_prompt_loader
 from core.intent_history import get_intent_session_history
+from core.utils import extract_json
 
 logger = logging.getLogger(__name__)
-
-# 内置默认（文件不存在或未配置 prompts_dir 时使用）
-_DEFAULT_SYSTEM_PROMPT = """
-你是一个专业的需求分析专家。请分析用户需求，判断需要哪些功能。
-
-【保守原则】⭐ 最高优先级
-- 若用户需求**已经具体、可执行**（如「查北京明天天气」「用 XX 知识库做政策问答」），则只做**清晰化/补全缺漏**，**禁止**添加用户未提及的能力或场景；rewritten_input 不要比原意明显更复杂。
-- 仅当用户明确表达**抽象概念**（如「做一个 XX 助手」「搞个客服机器人」）时，才可适度展开为 2~3 项具体能力，且不超出该概念范围。
-
-【何时需要澄清】⭐ 必须遵守
-- 当用户输入**过短**（如不足 15 字）或**明显模糊**（如仅「做个助手」「帮我做一个」），**必须**设 needs_clarification=true，并输出 1~3 个 clarification_questions。
-  - 问题示例：「您希望助手主要实现什么功能？（如：查天气、查政策、客服问答等）」
-- 若已提供 chat_history（多轮上下文），则本轮应基于历史与当前回复**合并为一条最终需求**，设 needs_clarification=false，**不再追问**。
-- 若用户输入中包含 **「【用户补充】」**（即首轮需求+用户补充的合并内容），表示用户已回答过澄清问题，**必须**设 needs_clarification=false，将首轮与补充内容合并为一条完整、可执行的 rewritten_input，**不再追问**。
-
-【核心判断原则】
-
-📌 实时信息查询原则（重要！）：
-- 查询天气、股票、汇率、航班等实时数据 → needs_tool=true（必须调用工具）
-- 原因：这些信息需要从外部 API 获取，无法通过知识库或 LLM 已有知识提供
-- ⚠️ 即使用户说"创建一个...工作流"，只要涉及实时数据查询，就需要工具
-- 示例：
-  ✓ "帮我查天气" → needs_tool=true
-  ✓ "今天会下雨吗" → needs_tool=true
-  ✓ "查询股票价格" → needs_tool=true
-  ✓ "明天去北京的航班" → needs_tool=true
-  ✓ "创建一个天气查询工作流" → needs_tool=true
-  ✓ "做一个查汇率的助手" → needs_tool=true
-
-📌 政策类特殊处理原则（重要！）：
-- 查询政策、法规、政府文件等 → 默认需要知识库 + 联网检索（混合模式）
-- 原因：政策时效性极强，新政策不断出台，旧政策可能废止
-- 过度服务原则：提供额外信息总比遗漏重要信息好
-- 示例：
-  ✓ "深汕的招商政策有哪些" → needs_knowledge=true, needs_tool=true（默认混合）
-  ✓ "最新的税收优惠政策" → needs_knowledge=true, needs_tool=true
-  ✓ "科技创新补贴政策" → needs_knowledge=true, needs_tool=true
-  ✓ "帮我查一下 XXX 政策的原文" → needs_knowledge=true, needs_tool=false（特例：只要原文）
-
-📌 混合检索场景（needs_tool=true AND needs_knowledge=true）：
-- 政策类查询：默认混合检索（除非用户明确只要原文）
-- 其他混合场景：既需要查知识库（静态内容），又需要查实时信息（动态内容）
-
-📌 简单问答场景（都不需要）：
-- 简单闲聊、通用知识、创意写作等 → needs_tool=false, needs_knowledge=false
-
-📌 抽象概念发散重写原则（rewritten_input 专用）：
-- 目标：用户说「创建XX助手/机器人」等一句话时，要把抽象概念重写为「可落地的具体能力」，方便后续选工具、匹配知识库、生成工作流节点。
-- 何时发散：用户需求是抽象/高层概念时（如「旅游助手」「客服机器人」「学习助手」「写稿助手」）。
-- 如何发散：在保持原意前提下，列举该类型助手通常需要的具体能力（查询、检索、推荐、规划等），并标明是否需要知识库、是否需要工具。
-- 示例（仅作参考）：
-  • 用户：「创建一个旅游助手」→ rewritten_input 可写：创建旅游助手工作流，支持查询旅游城市信息、当地天气、景点推荐与行程建议，可结合知识库与天气/地图等工具。
-  • 用户：「做一个智能客服」→ rewritten_input 可写：创建智能客服工作流，支持从知识库检索 FAQ、查询订单或工单、常见问题解答，可结合知识库与工单/查询类工具。
-- 何时不发散：用户需求已经足够具体（如「查北京明天天气」「从公司文档里找制度」），则只做清晰化，不强行罗列能力。
-
-【详细判断参考】
-
-1. 是否需要调用外部工具/API？（needs_tool）
-- 需要调用工具的典型场景：
-  • 实时信息查询：天气、股票、汇率、航班、火车时刻等
-  • 搜索类：新闻搜索、网页搜索、学术搜索等
-  • 计算处理类：翻译、数学计算、代码执行、图像处理等
-  • 第三方服务：地图导航、快递查询、酒店预订、机票预订等
-- 不需要工具的典型场景：
-  • 查询已有文档资料：公司制度、产品手册、技术文档等
-  • 基于知识库的问答：企业内部知识、历史数据、培训资料等
-  • 简单对话：闲聊、情感陪伴、创意写作、头脑风暴等
-
-2. 是否需要检索知识库？（needs_knowledge）
-- 需要知识库的典型场景：
-  • 企业/组织内部资料：公司文档、产品资料、技术手册、规章制度等
-  • 政策法规：政府文件、行业规定、地方政策、管理办法等
-  • 专业知识库：医疗知识、法律知识、金融知识、教育资料等
-  • 历史数据：销售记录、客户档案、项目文档、会议纪要等
-- 不需要知识库的典型场景：
-  • 通用知识问答：常识性问题、百科知识等
-  • 纯工具调用：只需要调用 API 即可完成任务（如天气查询、翻译、计算等）
-  • 创意类任务：写诗、写故事、生成创意等
-  • ⚠️ 即使用户说"创建一个...工作流"，如果不涉及查阅资料，就不需要知识库
-
-3. 是否需要多轮对话？（multi_turn）
-- 需要多轮交互时设为 true
-
-【其他场景的联网检索原则】
-- 政策类默认需要联网（见 System 消息的核心原则）
-- 其他场景需要联网的情况：
-  • 用户明确要求"实时查询"、"联网搜索"、"在线查询"等
-  • 查询动态信息：申报进度、公示名单、截止状态、实时库存、当前价格等
-  • 知识库可能没有的信息：最新新闻、突发事件、专家观点、网友评论等
-  • 需要调用第三方 API：天气、翻译、计算、地图等
-
-【输出要求】
-- 必须以 JSON 格式返回，包含字段：rewritten_input, needs_tool, needs_knowledge, multi_turn, needs_clarification, clarification_questions
-- rewritten_input：若用户需求已具体，控制在 50 字以内并写清要点；若为抽象概念（如「XX 助手」），需按上条原则发散为具体能力描述，可放宽至 80-100 字，保持语句连贯无冗余。
-- 示例：用户说「帮我创建一个旅游助手」时，rewritten_input 应类似「创建旅游助手工作流：支持查询旅游城市、当地天气、景点推荐与行程建议，可结合知识库与天气/地图等工具」而非仅写「创建一个旅游助手」。
-- 布尔值字段必须明确返回 true 或 false
-- needs_clarification：当需求过短或模糊时为 true，附上 clarification_questions；需求明确时为 false
-- clarification_questions：字符串数组，1~3 个澄清问题（仅 needs_clarification=true 时有值）
-""".strip()
-
-_DEFAULT_HUMAN_SINGLE = "用户需求：{user_input}"
-
-_DEFAULT_HUMAN_RESUME = (
-    "请根据上述对话与用户最新回复，合并为一条完整、可执行的需求描述，并输出最终意图。"
-    "本轮不要再次请求澄清，needs_clarification 必须为 false。\n\n"
-    "用户最新回复：{user_input}"
-)
 
 
 class UserAgent:
@@ -138,9 +35,9 @@ class UserAgent:
     ):
         self.llm = llm
         loader = get_prompt_loader(prompts_dir)
-        system = loader.get("intent", "system") or _DEFAULT_SYSTEM_PROMPT
-        human_single = loader.get("intent", "human_single") or _DEFAULT_HUMAN_SINGLE
-        human_resume = loader.get("intent", "human_resume") or _DEFAULT_HUMAN_RESUME
+        system = loader.get("intent", "system")
+        human_single = loader.get("intent", "human_single")
+        human_resume = loader.get("intent", "human_resume")
 
         self.prompt_single = ChatPromptTemplate.from_messages(
             [
@@ -194,31 +91,42 @@ class UserAgent:
                     messages.append(AIMessage(content=m.get("content", "")))
 
         if messages:
-            chain = self.prompt_with_history | self.llm
-            response = await chain.ainvoke({
-                "chat_history": messages,
-                "user_input": user_input,
-            })
+            chain = self.prompt_with_history | self.llm | StrOutputParser()
+            content = await chain.ainvoke(
+                {
+                    "chat_history": messages,
+                    "user_input": user_input,
+                }
+            )
         else:
-            chain = self.prompt_single | self.llm
-            response = await chain.ainvoke({"user_input": user_input})
+            chain = self.prompt_single | self.llm | StrOutputParser()
+            content = await chain.ainvoke({"user_input": user_input})
 
-        # 解析 JSON 响应
-        result = extract_json(response.content)
-        if result is None:
-            logger.error(f"LLM 响应 JSON 提取/解析失败。原始响应：{response.content}")
-            result = {}
+        raw = (content or "").strip()
+        data = extract_json(raw)
+        if not data:
+            raise ValueError(
+                "意图理解返回内容无法解析为 JSON，请确保模型按 prompt 要求输出 JSON。"
+                f" 返回预览: {raw[:200]!r}"
+            )
+        try:
+            parsed = IntentParseResult.model_validate(data)
+        except ValidationError as ve:
+            raise ValueError(
+                f"意图理解 JSON 字段校验失败: {ve}. 返回预览: {raw[:200]!r}"
+            ) from ve
+        logger.info("意图理解完成，parsed=%s", parsed)
 
-        # 创建 EnhancedIntent
+        # 从解析结果构建 EnhancedIntent（注入 original_input）
         intent = EnhancedIntent(
-            original_input=user_input,
-            rewritten_input=result.get("rewritten_input", user_input),
-            needs_tool=result.get("needs_tool", False),
-            needs_knowledge=result.get("needs_knowledge", False),
-            needs_clarification=result.get("needs_clarification", False),
-            clarification_questions=result.get("clarification_questions", []),
-            complexity_hint=result.get("complexity_hint", "moderate"),
-            multi_turn=result.get("multi_turn", True),
+            original_input=user_input or "",
+            rewritten_input=parsed.rewritten_input or user_input or "",
+            needs_tool=parsed.needs_tool,
+            needs_knowledge=parsed.needs_knowledge,
+            needs_clarification=parsed.needs_clarification,
+            clarification_questions=parsed.clarification_questions or [],
+            complexity_hint=parsed.complexity_hint,
+            multi_turn=parsed.multi_turn,
         )
 
         # 有 chat_history（含从 session_id 加载的历史）时强制不再澄清

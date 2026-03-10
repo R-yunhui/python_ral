@@ -83,15 +83,19 @@ async def run_tool_selection(
             if attempt == cfg.max_retries_tool:
                 break
             logger.warning(
-                "工具选择重试",
-                extra={"attempt": attempt + 1, "reason": str(e)},
+                "工具选择重试（第 %d 次），原因：%s",
+                attempt + 1,
+                e,
+                exc_info=True,
             )
 
     duration_ms = (time.time() - start_time) * 1000
     logger.warning(
-        "工具选择降级：返回空工具列表",
-        extra={"reason": str(last_error) if last_error else "unknown"},
+        "工具选择降级：返回空工具列表，原因：%s",
+        last_error if last_error is not None else "未知",
     )
+    if last_error is not None and isinstance(last_error, Exception):
+        logger.debug("工具选择降级异常详情", exc_info=last_error)
     await ctx.emit_progress(
         ProgressEvent.create_agent_complete_event(
             AgentName.TOOL_SELECTION,

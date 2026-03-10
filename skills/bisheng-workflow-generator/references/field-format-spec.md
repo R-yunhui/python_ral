@@ -19,7 +19,8 @@
 {"key": "output_user", "type": "switch", "label": "true", "value": true}
 ```
 
-### 列表字段
+### 列表字段（如 guide_question）
+`guide_question` 的 value 必须是**纯字符串数组**，平台 GuideQuestionData 要求 `list[str]`。不可用 `[{"key":"pq_001","value":"..."}]` 对象数组（该格式仅用于 preset_question）。
 ```json
 {"key": "guide_question", "type": "input_list", "label": "true", "value": ["问题 1", "问题 2"], "placeholder": "true"}
 ```

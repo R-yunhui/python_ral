@@ -15,18 +15,16 @@ class Config(BaseModel):
     # LLM 配置 - 使用阿里云 DashScope
     llm_provider: str = Field(default="dashscope", description="LLM 提供商")
     llm_model: str = Field(
-        default_factory=lambda: os.getenv("QWEN_CHAT_MODEL", "qwen3-max"),
+        default_factory=lambda: os.getenv("QWEN_CHAT_MODEL"),
         description="LLM 模型",
     )
     llm_api_key: str = Field(
-        default_factory=lambda: os.getenv("DASHSCOPE_API_KEY", ""),
+        default_factory=lambda: os.getenv("DASHSCOPE_API_KEY"),
         description="DashScope API Key",
     )
     llm_base_url: str = Field(
-        default_factory=lambda: os.getenv(
-            "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        ),
-        description="DashScope API 地址",
+        default_factory=lambda: os.getenv("DASHSCOPE_BASE_URL"),
+        description="模型 API 地址",
     )
     llm_temperature: float = Field(default=0.7, ge=0, le=2)
 
@@ -46,12 +44,6 @@ class Config(BaseModel):
     prompts_dir: Optional[str] = Field(
         default_factory=lambda: os.getenv("PROMPTS_DIR", ""),
         description="提示词 .md/.txt 根目录，为空则使用包内默认",
-    )
-
-    # 工具配置
-    bocha_search_api_key: str = Field(
-        default_factory=lambda: os.getenv("BOCHA_WEB_SEARCH_API_KEY", ""),
-        description="博查联网搜索 API Key",
     )
 
     # 日志配置
@@ -113,7 +105,8 @@ class Config(BaseModel):
     # - 未配置 MySQL 时自动 fallback 到 SQLite（零配置）
     # - 设置 DB_ENABLED=false 可完全禁用数据库
     db_enabled: bool = Field(
-        default_factory=lambda: os.getenv("DB_ENABLED", "true").lower() in ("true", "1", "yes"),
+        default_factory=lambda: os.getenv("DB_ENABLED", "true").lower()
+        in ("true", "1", "yes"),
         description="是否启用数据库，设为 false 时完全不落库",
     )
     mysql_host: str = Field(
@@ -139,9 +132,7 @@ class Config(BaseModel):
 
     def is_mysql_configured(self) -> bool:
         """是否已配置 MySQL 连接信息"""
-        return bool(
-            self.mysql_host and self.mysql_user and self.mysql_database
-        )
+        return bool(self.mysql_host and self.mysql_user and self.mysql_database)
 
     def is_db_enabled(self) -> bool:
         """是否启用数据库（MySQL 或 SQLite fallback）"""
@@ -165,7 +156,6 @@ class Config(BaseModel):
             "base_url": self.llm_base_url,
             "temperature": self.llm_temperature,
             "bisheng_url": self.bisheng_base_url,
-            "bocha_search_api_key": self.bocha_search_api_key,
         }
 
 

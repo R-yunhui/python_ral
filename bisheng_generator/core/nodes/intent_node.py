@@ -50,8 +50,10 @@ async def understand_with_retry(
             if attempt == cfg.max_retries_intent:
                 break
             logger.warning(
-                "意图理解重试",
-                extra={"attempt": attempt + 1, "reason": str(e)},
+                "意图理解重试（第 %d 次），原因：%s",
+                attempt + 1,
+                e,
+                exc_info=True,
             )
 
     duration_ms = (time.time() - start_time) * 1000
@@ -62,7 +64,12 @@ async def understand_with_retry(
         needs_knowledge=False,
         multi_turn=True,
     )
-    logger.warning("意图理解降级：使用原始输入作为重写结果")
+    logger.warning(
+        "意图理解降级：使用原始输入作为重写结果，原因：%s",
+        last_error if last_error is not None else "未知",
+    )
+    if last_error is not None and isinstance(last_error, Exception):
+        logger.debug("意图理解降级异常详情", exc_info=last_error)
     await ctx.emit_progress(
         ProgressEvent.create_agent_complete_event(
             AgentName.INTENT_UNDERSTANDING,
