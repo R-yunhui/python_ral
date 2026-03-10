@@ -508,6 +508,37 @@ class WorkflowAgent:
 
     MAX_FIX_ROUNDS = 2
 
+    # 多草图模式下的固定维度配置：id / 标题 / 提示词说明
+    FLOW_SKETCH_DIMENSIONS: List[Dict[str, str]] = [
+        {
+            "id": "simple_exec_first",
+            "title": "方案A：上线可执行优先",
+            "goal_hint": (
+                "在满足所有平台约束的前提下，优先保证「容易在毕昇平台直接上线、实现成本最低」。"
+                "流程应尽量简单、节点数量少、分支不宜过多，避免不必要的 condition 和 code 节点，"
+                "只保留完成需求所必需的知识库检索和工具调用链路，同时保留基础的多轮对话闭环。"
+            ),
+        },
+        {
+            "id": "robust_high_accuracy",
+            "title": "方案B：准确性与鲁棒性优先",
+            "goal_hint": (
+                "在满足所有平台约束的前提下，优先保证「检索准确性和结果鲁棒性更高」。"
+                "可以适当增加知识库检索 + LLM 解读/重写的链路，引入必要的 code 节点做 JSON 解析与异常兜底，"
+                "在关键节点前后允许使用少量 condition 节点区分有结果/无结果/低置信度等分支，以提高整体回答质量。"
+            ),
+        },
+        {
+            "id": "extensible_future_proof",
+            "title": "方案C：可扩展与可演进优先",
+            "goal_hint": (
+                "在满足所有平台约束的前提下，优先保证「结构清晰、便于未来扩展与演进」。"
+                "使用 condition 对不同业务场景进行清晰拆分，每个分支内部预留 1–2 个通用的 LLM 或 code 汇总节点，"
+                "方便后续插入监控、AB 实验或更多工具/知识库调用，同时避免过深的链路嵌套。"
+            ),
+        },
+    ]
+
     def __init__(
         self,
         llm: BaseChatModel,
@@ -572,9 +603,11 @@ class WorkflowAgent:
 
             sketch_json = _json.dumps(flow_sketch, ensure_ascii=False, indent=2)
             task_prompt = (
-                task_prompt + "\n\n【必须遵守的流程图草图】\n"
-                "以下为已确定的流程图结构（nodes 与 edges），请严格按此结构生成完整毕昇工作流 JSON："
-                "不得合并、省略或新增草图以外的分支，不得改变节点类型与连线关系。\n\n"
+                task_prompt + "\n\n【参考流程图草图】\n"
+                "以下为已确定的流程图结构（nodes 与 edges），请以此作为完整毕昇工作流 JSON 的「主干结构」：\n"
+                "- start / input / condition / llm / tool / knowledge_retriever 的分支走向应与草图保持一致（不要改变主要分支的语义和方向）；\n"
+                "- 你可以在节点之间插入必要的 code 节点或校验节点，也可以将单个 llm 步骤拆分为多个更细的 llm 步骤；\n"
+                "- 只要不改变草图中已有分支的大致路径，可以根据需要补充少量辅助节点，以提升可执行性和鲁棒性。\n\n"
                 f"{sketch_json}\n"
             )
 
@@ -714,21 +747,6 @@ class WorkflowAgent:
         )
         return workflow_json
 
-    def _write_debug_round(
-        self, debug_dir: Path, round_name: str, workflow_json: Dict[str, Any]
-    ) -> None:
-        """将当前轮的工作流 JSON 写入调试目录，便于按请求分析各轮差异。写入失败不抛错。"""
-        if not debug_dir or not workflow_json:
-            return
-        try:
-            debug_dir.mkdir(parents=True, exist_ok=True)
-            path = debug_dir / f"{round_name}.json"
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(workflow_json, f, ensure_ascii=False, indent=2)
-            logger.info("[workflow_debug] 已写入 %s", path)
-        except Exception as e:
-            logger.warning("[workflow_debug] 写入 %s 失败: %s", round_name, e)
-
     # ─── 使用量日志 ─────────────────────────────────────────────
 
     def _log_usage(self, cb: UsageMetadataCallbackHandler) -> None:
@@ -745,6 +763,164 @@ class WorkflowAgent:
                 usage.get("output_tokens"),
                 usage.get("total_tokens"),
             )
+
+    # ─── 流程图草图简化 ─────────────────────────────────────────
+
+    def _simplify_flow_sketch(
+        self, sketch: Dict[str, Any], max_nodes: int = 12
+    ) -> Dict[str, Any]:
+        """
+        当前版本不对草图结构做任何修改，仅作为占位，后续若需要可以只用于前端展示层面的简化。
+        为避免影响完整工作流生成，原始 nodes / edges 结构会原样返回。
+        """
+        return sketch
+
+    # ─── 流程图草图（先于完整工作流生成）─────────────────────────
+
+    async def _generate_flow_sketch_once(
+        self,
+        intent: EnhancedIntent,
+        tool_plan: ToolPlan,
+        knowledge_match: KnowledgeMatch,
+        goal_hint: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        生成单个流程图草图（仅 nodes + edges）。
+        goal_hint 用于引导本轮草图的取舍方向（可执行优先 / 准确率优先等）。
+        """
+        tools_info = self._format_tools_info(tool_plan)
+        knowledge_info = self._format_knowledge_info(knowledge_match)
+        user_analysis = (
+            f"需求描述：{intent.rewritten_input}\n"
+            f"工作流类型：{intent.get_workflow_type()}\n"
+            f"是否需要工具：{intent.needs_tool}\n"
+            f"是否需要知识库：{intent.needs_knowledge}\n"
+        )
+        loader = get_prompt_loader(self._prompts_dir)
+        system_tpl = loader.get("flow_sketch", "system")
+        user_tpl = loader.get("flow_sketch", "user_message")
+        if not system_tpl or not user_tpl:
+            logger.warning("flow_sketch 提示词未配置，跳过草图")
+            return None
+
+        # 在系统提示中追加本轮草图的目标说明，保持对现有提示词的兼容
+        if goal_hint:
+            user_analysis = user_analysis + f"\n【本轮草图目标】{goal_hint}"
+
+        system_prompt = system_tpl.format(
+            user_analysis=user_analysis,
+            tools_info=tools_info,
+            knowledge_info=knowledge_info,
+        )
+        user_message = user_tpl.format(
+            intent_rewritten_input=intent.rewritten_input or intent.original_input
+        )
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_message),
+            ]
+            response = await self.llm.ainvoke(messages)
+            content = (
+                response.content if hasattr(response, "content") else str(response)
+            )
+            sketch = extract_json(content)
+            if not sketch or not isinstance(sketch, dict):
+                logger.warning("流程图草图解析失败：未得到有效 JSON")
+                return None
+            nodes = sketch.get("nodes")
+            edges = sketch.get("edges")
+            if not isinstance(nodes, list) or not isinstance(edges, list):
+                logger.warning("流程图草图格式错误：缺少 nodes 或 edges 数组")
+                return None
+            logger.info(
+                "流程图草图生成完成，nodes=%d, edges=%d (goal=%s)",
+                len(nodes),
+                len(edges),
+                goal_hint or "",
+            )
+            raw = {"nodes": nodes, "edges": edges}
+            simplified = self._simplify_flow_sketch(raw, max_nodes=12)
+            return simplified
+        except Exception as e:
+            logger.warning("流程图草图生成异常：%s，将无草图继续生成", e)
+            return None
+
+    async def generate_flow_sketch(
+        self,
+        intent: EnhancedIntent,
+        tool_plan: ToolPlan,
+        knowledge_match: KnowledgeMatch,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        根据需求与候选工具/知识库生成单个流程图草图（仅 nodes + edges）。
+        向后兼容旧逻辑：不指定维度，使用默认取舍。
+        """
+        return await self._generate_flow_sketch_once(
+            intent=intent,
+            tool_plan=tool_plan,
+            knowledge_match=knowledge_match,
+            goal_hint=None,
+        )
+
+    async def generate_flow_sketch_variants(
+        self,
+        intent: EnhancedIntent,
+        tool_plan: ToolPlan,
+        knowledge_match: KnowledgeMatch,
+    ) -> List[Dict[str, Any]]:
+        """
+        按不同取舍维度生成多份流程图草图备选项，供前端交互选择。
+
+        返回的每个元素结构：
+        {
+            "id": 维度ID（如 simple_exec_first）,
+            "title": 展示用标题,
+            "description": 维度说明,
+            "sketch": {"nodes": [...], "edges": [...]}
+        }
+        """
+        variants: List[Dict[str, Any]] = []
+        for dim in self.FLOW_SKETCH_DIMENSIONS:
+            dim_id = dim.get("id") or ""
+            goal_hint = dim.get("goal_hint") or ""
+            title = dim.get("title") or dim_id
+            sketch = await self._generate_flow_sketch_once(
+                intent=intent,
+                tool_plan=tool_plan,
+                knowledge_match=knowledge_match,
+                goal_hint=goal_hint or None,
+            )
+            if not sketch:
+                continue
+            variants.append(
+                {
+                    "id": dim_id,
+                    "title": title,
+                    "description": goal_hint,
+                    "sketch": sketch,
+                }
+            )
+
+        # 若全部失败，则返回空列表，由上游回退到单草图逻辑
+        return variants
+
+    def _write_debug_round(
+        self, debug_dir: Path, round_name: str, workflow_json: Dict[str, Any]
+    ) -> None:
+        """将当前轮的工作流 JSON 写入调试目录，便于按请求分析各轮差异。写入失败不抛错。"""
+        if not debug_dir or not workflow_json:
+            return
+        try:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            path = debug_dir / f"{round_name}.json"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(workflow_json, f, ensure_ascii=False, indent=2)
+            logger.info("[workflow_debug] 已写入 %s", path)
+        except Exception as e:
+            logger.warning("[workflow_debug] 写入 %s 失败: %s", round_name, e)
 
     # ─── 后处理：规范化 ─────────────────────────────────────────
 
@@ -1123,65 +1299,3 @@ class WorkflowAgent:
         return "\n".join(lines)
 
     # ─── 流程图草图（先于完整工作流生成）─────────────────────────
-
-    async def generate_flow_sketch(
-        self,
-        intent: EnhancedIntent,
-        tool_plan: ToolPlan,
-        knowledge_match: KnowledgeMatch,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        根据需求与候选工具/知识库生成流程图草图（仅 nodes + edges）。
-        不依赖 skill，仅用轻量 prompt。失败时返回 None，下游可无草图继续生成。
-        """
-        tools_info = self._format_tools_info(tool_plan)
-        knowledge_info = self._format_knowledge_info(knowledge_match)
-        user_analysis = (
-            f"需求描述：{intent.rewritten_input}\n"
-            f"工作流类型：{intent.get_workflow_type()}\n"
-            f"是否需要工具：{intent.needs_tool}\n"
-            f"是否需要知识库：{intent.needs_knowledge}\n"
-        )
-        loader = get_prompt_loader(self._prompts_dir)
-        system_tpl = loader.get("flow_sketch", "system")
-        user_tpl = loader.get("flow_sketch", "user_message")
-        if not system_tpl or not user_tpl:
-            logger.warning("flow_sketch 提示词未配置，跳过草图")
-            return None
-        system_prompt = system_tpl.format(
-            user_analysis=user_analysis,
-            tools_info=tools_info,
-            knowledge_info=knowledge_info,
-        )
-        user_message = user_tpl.format(
-            intent_rewritten_input=intent.rewritten_input or intent.original_input
-        )
-        try:
-            from langchain_core.messages import SystemMessage, HumanMessage
-
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_message),
-            ]
-            response = await self.llm.ainvoke(messages)
-            content = (
-                response.content if hasattr(response, "content") else str(response)
-            )
-            sketch = extract_json(content)
-            if not sketch or not isinstance(sketch, dict):
-                logger.warning("流程图草图解析失败：未得到有效 JSON")
-                return None
-            nodes = sketch.get("nodes")
-            edges = sketch.get("edges")
-            if not isinstance(nodes, list) or not isinstance(edges, list):
-                logger.warning("流程图草图格式错误：缺少 nodes 或 edges 数组")
-                return None
-            logger.info(
-                "流程图草图生成完成，nodes=%d, edges=%d",
-                len(nodes),
-                len(edges),
-            )
-            return {"nodes": nodes, "edges": edges}
-        except Exception as e:
-            logger.warning("流程图草图生成异常：%s，将无草图继续生成", e)
-            return None

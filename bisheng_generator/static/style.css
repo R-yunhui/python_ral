@@ -281,6 +281,144 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
 }
 .clarify-list li:last-child{border:none}
 
+/* 流程图草图多方案选择（flow_sketch_selection） */
+.msg-flow-sketch .bubble.flow-sketch-bubble{
+  border-color:var(--accent);
+  background:linear-gradient(135deg,var(--accent-bg) 0%,#F4F6FF 100%);
+}
+.flow-sketch-msg{
+  font-size:15px;color:var(--c-text);
+  margin-bottom:10px;line-height:1.6;
+}
+.flow-variants-list{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  margin-top:4px;
+}
+.flow-variant{
+  border-radius:var(--r-s);
+  border:1px solid var(--border-l);
+  background:var(--bg);
+  box-shadow:var(--sh-1);
+  cursor:pointer;
+  transition:box-shadow .12s ease,border-color .12s ease,background .12s ease,transform .1s ease;
+}
+.flow-variant:hover{
+  border-color:var(--accent);
+  background:#F5F7FF;
+  transform:translateY(-1px);
+}
+.flow-variant.selected{
+  border-color:var(--accent);
+  background:#EFF4FF;
+  box-shadow:var(--sh-3);
+}
+.flow-variant-row-head{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  padding:10px 12px;
+}
+.flow-variant-row-main{
+  flex:1;
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+.flow-variant-title{
+  font-family:var(--f-d);
+  font-weight:700;
+  font-size:14px;
+  color:var(--c-text);
+}
+.flow-variant-desc{
+  font-size:13px;
+  color:var(--c-sub);
+  line-height:1.6;
+}
+.flow-variant-meta{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  align-items:flex-end;
+}
+.flow-meta-pill{
+  font-size:11px;
+  padding:2px 8px;
+  border-radius:999px;
+  background:var(--border-l);
+  color:var(--c-sub);
+  font-family:var(--f-m);
+}
+.flow-meta-id{
+  background:var(--bg-card);
+  color:var(--accent);
+  border:1px dashed var(--accent-bg);
+}
+.flow-variant-toggle{
+  margin-left:8px;
+  margin-top:2px;
+  width:26px;height:26px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background:var(--bg-card);
+  display:grid;place-items:center;
+  cursor:pointer;
+  color:var(--c-muted);
+  flex-shrink:0;
+  transition:background .12s ease,border-color .12s ease,transform .15s ease;
+}
+.flow-variant-toggle:hover{
+  border-color:var(--accent);
+  color:var(--accent);
+  background:#EEF3FF;
+}
+.flow-variant-row-body{
+  padding:0 12px 10px;
+  border-top:1px dashed var(--border-l);
+  max-height:2000px;
+  opacity:1;
+  overflow:hidden;
+  transition:max-height .25s ease,opacity .18s ease,padding-top .18s ease,padding-bottom .18s ease;
+}
+.flow-variant-row-body.collapsed{
+  max-height:0;
+  opacity:0;
+  padding-top:0;
+  padding-bottom:0;
+  border-top:none;
+}
+.flow-variant-desc-block{
+  margin-top:8px;
+}
+.flow-variant-mermaid-large{
+  border-radius:10px;
+  border:1px dashed var(--border);
+  background:var(--bg-card);
+  padding:8px;
+  margin-top:8px;
+  min-height:120px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow-x:auto;
+}
+.flow-variant-mermaid-large .mermaid{
+  min-height:60px;
+}
+.flow-variant-mermaid-large svg{
+  max-width:100%;
+  height:auto;
+}
+.flow-variant-actions{
+  margin-top:10px;
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+}
+
 /* progress card — full width, collapsible */
 .msg-progress{display:block}
 .proc-card{

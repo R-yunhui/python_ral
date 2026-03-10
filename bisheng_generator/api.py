@@ -59,6 +59,35 @@ setup_logging(
 logger = logging.getLogger(__name__)
 
 
+# 全局复用一个 WorkflowOrchestrator，确保 LangGraph 的 checkpointer
+# 在首轮和续轮请求之间共享，从而让 interrupt/resume 正常工作。
+_global_orchestrator: Optional[WorkflowOrchestrator] = None
+
+
+def get_orchestrator(
+    config_obj: Optional[dict] = None,
+    progress_callback=None,
+) -> WorkflowOrchestrator:
+    """
+    获取（或初始化）全局 WorkflowOrchestrator 实例。
+
+    - 首次调用时创建实例并构建 LangGraph（带 InMemorySaver）
+    - 后续调用复用同一个实例，仅更新 progress_callback
+    """
+    global _global_orchestrator
+
+    if _global_orchestrator is None:
+        _global_orchestrator = WorkflowOrchestrator(
+            config_obj=config_obj, progress_callback=progress_callback
+        )
+    else:
+        # 更新进度回调，避免仍指向上一次请求
+        if progress_callback is not None:
+            _global_orchestrator.progress_callback = progress_callback
+
+    return _global_orchestrator
+
+
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     """FastAPI 生命周期：数据库启用时（MySQL 或 SQLite）自动创建表。"""
@@ -479,16 +508,18 @@ async def generate_workflow_stream(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            start_event = ProgressEvent.create_start_event(user_query)
-            if config.is_mysql_configured():
-                try:
-                    save_timeline_progress_event(
-                        config, session_id, start_event.model_dump(mode="json")
-                    )
-                except Exception as e:
-                    logger.warning("写入会话进度事件失败: %s", e)
-            yield f"data: {json.dumps(start_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-            await asyncio.sleep(0.1)
+            # 首轮请求时发送「开始生成工作流」进度事件；续轮时直接从中断处继续
+            if not is_resume:
+                start_event = ProgressEvent.create_start_event(user_query)
+                if config.is_mysql_configured():
+                    try:
+                        save_timeline_progress_event(
+                            config, session_id, start_event.model_dump(mode="json")
+                        )
+                    except Exception as e:
+                        logger.warning("写入会话进度事件失败: %s", e)
+                yield f"data: {json.dumps(start_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.1)
 
             token = _get_access_token(fastapi_request)
             logger.info(
@@ -647,7 +678,7 @@ async def run_generation(
     graph_config = {"configurable": {"thread_id": session_id}} if session_id else {}
 
     try:
-        orchestrator = WorkflowOrchestrator(
+        orchestrator = get_orchestrator(
             config_obj=request_config, progress_callback=progress_callback
         )
         # 知识库在知识库匹配节点内惰性加载，此处不再预加载

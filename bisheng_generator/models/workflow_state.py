@@ -16,6 +16,8 @@ class WorkflowState(TypedDict):
     knowledge_match: Optional[KnowledgeMatch]
     flow_sketch: NotRequired[Optional[Dict[str, Any]]]
     """流程图草图：nodes + edges，供工作流生成节点严格按结构展开"""
+    flow_sketch_variants: NotRequired[Optional[List[Dict[str, Any]]]]
+    """多方案流程图草图：按不同维度生成的备选列表，由前端/用户选择其一"""
     workflow: Optional[Dict[str, Any]]
     error: Optional[str]
     warnings: NotRequired[Optional[List[str]]]

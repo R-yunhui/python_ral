@@ -34,6 +34,11 @@ const modalDownloadBtn  = $('modalDownloadBtn');
 const modalCopyBtn      = $('modalCopyBtn');
 const modalCloseBtn     = $('modalCloseBtn');
 
+// 流程图草图大图模态框
+const flowSketchModal      = $('flowSketchModal');
+const flowSketchContent    = $('flowSketchContent');
+const flowSketchModalClose = $('flowSketchModalCloseBtn');
+
 let currentWorkflow      = null;
 let currentFilename      = null;
 let currentSessionId     = null;
@@ -118,6 +123,18 @@ function bind() {
     if (modalCloseBtn)     modalCloseBtn.addEventListener('click', closeJsonModal);
     if (jsonModal)         jsonModal.addEventListener('click', e => { if (e.target === jsonModal) closeJsonModal(); });
 
+    // 流程图草图大图 Modal 关闭
+    if (flowSketchModalClose) {
+        flowSketchModalClose.addEventListener('click', () => {
+            if (flowSketchModal) flowSketchModal.style.display = 'none';
+        });
+    }
+    if (flowSketchModal) {
+        flowSketchModal.addEventListener('click', e => {
+            if (e.target === flowSketchModal) flowSketchModal.style.display = 'none';
+        });
+    }
+
     document.querySelectorAll('.chip').forEach(c => {
         c.addEventListener('click', () => { if (queryInput) { queryInput.value = c.dataset.q || ''; queryInput.focus(); } });
     });
@@ -164,7 +181,9 @@ function stream(query, sid, resume, originalQuery) {
             if (originalQuery) p.set('original_query', originalQuery);
         }
         eventSource = new EventSource('/api/generate/stream?' + p);
-        let done = false, progShown = false;
+        // 首次生成时创建新的进度卡片；续轮时复用已有进度卡片
+        let done = false;
+        let progShown = resume && currentProgressEl ? true : false;
 
         eventSource.onmessage = ev => {
             try {
@@ -176,10 +195,17 @@ function stream(query, sid, resume, originalQuery) {
                     if (pay.session_id) currentSessionId = pay.session_id;
                     pendingClarification = pay.pending_clarification || {};
                     appState = 'needs_clarification';
-                    updateProg('等待补充信息');
                     collapseProc();
-                    addClarify(pendingClarification);
-                    setInputClarify();
+                    // 区分「意图澄清」与「流程图草图多方案选择」
+                    if (pendingClarification && pendingClarification.type === 'flow_sketch_selection') {
+                        updateProg('等待选择流程图草图方案');
+                        addFlowSketchSelection(pendingClarification);
+                        setInputFlowSketchSelection();
+                    } else {
+                        updateProg('等待补充信息');
+                        addClarify(pendingClarification);
+                        setInputClarify();
+                    }
                     setLoading(false);
                     resolve(); return;
                 }
@@ -460,6 +486,153 @@ function addClarify(p) {
     chatMessages.appendChild(el); scroll();
 }
 
+// 流程图草图多方案选择（flow_sketch_selection）
+function addFlowSketchSelection(p) {
+    const msg = p.message || '已生成多份流程图草图方案，请选择一个用于后续完整工作流生成。';
+    const opts = Array.isArray(p.options) ? p.options : [];
+
+    let h = '<div class="bubble flow-sketch-bubble">';
+    h += '<div class="clarify-tag">候选草图</div>';
+    h += '<div class="flow-sketch-msg">' + esc(msg) + '</div>';
+
+    if (opts.length) {
+        h += '<div class="flow-variants-list">';
+        opts.forEach(o => {
+            const id = o.id || '';
+            const title = o.title || id || '候选方案';
+            const desc = o.description || '';
+            const nodesCount = o.nodes_count != null ? o.nodes_count : null;
+            const mermaid = o.mermaid || '';
+
+            h += '<div class="flow-variant" data-id="' + esc(id) + '">';
+            // 头部：一行展示标题 + meta + 折叠箭头
+            h += '  <div class="flow-variant-row-head">';
+            h += '    <div class="flow-variant-row-main">';
+            h += '      <div class="flow-variant-title">' + esc(title) + '</div>';
+            h += '    </div>';
+            h += '    <div class="flow-variant-meta">';
+            if (nodesCount != null) {
+                h += '      <span class="flow-meta-pill">节点数·' + nodesCount + '</span>';
+            }
+            if (id) {
+                h += '      <span class="flow-meta-pill flow-meta-id">' + esc(id) + '</span>';
+            }
+            h += '    </div>';
+            h += '    <button type="button" class="flow-variant-toggle" aria-label="展开/收起">';
+            h += '      <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3.5 5.25L7 8.75l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+            h += '    </button>';
+            h += '  </div>';
+
+            // 折叠内容：详细描述 + 完整流程图 + 按钮
+            h += '  <div class="flow-variant-row-body collapsed">';
+            if (desc) {
+                h += '    <div class="flow-variant-desc flow-variant-desc-block">' + esc(desc) + '</div>';
+            }
+            if (mermaid) {
+                h += '    <div class="flow-variant-mermaid-large"><pre class="mermaid">' + esc(mermaid) + '</pre></div>';
+            }
+            h += '    <div class="flow-variant-actions">';
+            if (mermaid) {
+                h += '      <button type="button" class="btn btn-sm _view-big">查看大图</button>';
+            }
+            h += '      <button type="button" class="btn btn-primary btn-sm _pick-variant">使用该方案</button>';
+            h += '    </div>';
+            h += '  </div>';
+
+            h += '</div>';
+        });
+        h += '</div>';
+    }
+
+    h += '</div>';
+
+    const el = document.createElement('div');
+    el.className = 'msg msg-ast msg-flow-sketch';
+    el.innerHTML = h;
+    chatMessages.appendChild(el);
+    scroll();
+
+    // 绑定交互：每一行可折叠 + 高亮 + 使用该方案
+    const rows = el.querySelectorAll('.flow-variant');
+    rows.forEach(row => {
+        const id = row.dataset.id || '';
+        const titleEl = row.querySelector('.flow-variant-title');
+        const title = titleEl ? titleEl.textContent : id;
+        const head = row.querySelector('.flow-variant-row-head');
+        const body = row.querySelector('.flow-variant-row-body');
+        const toggleBtn = row.querySelector('.flow-variant-toggle');
+        const btnUse = row.querySelector('._pick-variant');
+        const btnViewBig = row.querySelector('._view-big');
+
+        const toggle = (e) => {
+            if (e) e.stopPropagation();
+            const isCollapsed = body.classList.contains('collapsed');
+            // 只展开一个，其它全部收起
+            rows.forEach(r => {
+                const b = r.querySelector('.flow-variant-row-body');
+                r.classList.remove('selected');
+                if (b) b.classList.add('collapsed');
+            });
+            if (isCollapsed) {
+                body.classList.remove('collapsed');
+                row.classList.add('selected');
+            }
+        };
+
+        if (head) {
+            head.addEventListener('click', toggle);
+        }
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', toggle);
+        }
+        if (btnUse) {
+            btnUse.addEventListener('click', e => {
+                e.stopPropagation();
+                resumeWithSelection(id, title);
+            });
+        }
+        if (btnViewBig && mermaid) {
+            btnViewBig.addEventListener('click', e => {
+                e.stopPropagation();
+                openFlowSketchModal(mermaid);
+            });
+        }
+    });
+
+    // 渲染每个方案的完整 Mermaid 流程图
+    if (window.mermaid) {
+        try {
+            const mNodes = el.querySelectorAll('.flow-variant-mermaid-large .mermaid');
+            if (mNodes.length) {
+                window.mermaid.run({ nodes: mNodes }).catch(() => {});
+            }
+        } catch (_) {}
+    }
+}
+
+// 使用选中的草图方案继续执行（resume）
+function resumeWithSelection(choiceId, title) {
+    if (!choiceId) return;
+    hideErr(); removeWelcome(); closePanels();
+    const orig = (pendingClarification && pendingClarification.original_user_input) || '';
+
+    // 在对话中补充一条“选择方案”的用户消息，便于回溯
+    const label = title || choiceId;
+    addUser('选择流程图方案：' + label);
+    clearInput();
+
+    appState = 'streaming';
+    setLoading(true);
+    stream(choiceId, currentSessionId, true, orig)
+        .catch(e => {
+            showErr('续轮失败：' + e.message);
+            addError(e.message);
+        })
+        .finally(() => {
+            setLoading(false);
+        });
+}
+
 function addResult(data) {
     const ty = data.metadata?.intent?.workflow_type || '工作流';
     const m = data.metadata || {};
@@ -516,6 +689,17 @@ function setInputClarify() {
     if (queryInput) { queryInput.placeholder = '请补充信息以继续…'; queryInput.focus(); }
     if (inputHint) inputHint.textContent = '输入补充信息后按 Enter 发送';
 }
+
+// 针对流程图草图多方案选择的输入提示
+function setInputFlowSketchSelection() {
+    if (queryInput) {
+        queryInput.placeholder = '推荐直接点击上方方案卡片，也可以在此输入方案 ID（如 simple_exec_first）继续…';
+        queryInput.focus();
+    }
+    if (inputHint) {
+        inputHint.textContent = '点击候选方案卡片即可继续，或输入方案 ID 后按 Enter';
+    }
+}
 function newSession() {
     if (chatMessages) {
         chatMessages.innerHTML = '';
@@ -558,6 +742,22 @@ function openJsonModal() {
 }
 function closeJsonModal() {
     if (jsonModal) jsonModal.style.display = 'none';
+}
+
+// 打开流程图草图大图 Modal
+function openFlowSketchModal(mermaidSource) {
+    if (!flowSketchModal || !flowSketchContent) return;
+    flowSketchContent.innerHTML = '<pre class="mermaid">' + esc(mermaidSource) + '</pre>';
+    flowSketchModal.style.display = 'flex';
+
+    if (window.mermaid) {
+        try {
+            const nodes = flowSketchContent.querySelectorAll('.mermaid');
+            if (nodes.length) {
+                window.mermaid.run({ nodes }).catch(() => {});
+            }
+        } catch (_) {}
+    }
 }
 
 // ==================== Import / Download / Copy ====================
