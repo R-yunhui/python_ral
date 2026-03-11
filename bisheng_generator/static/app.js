@@ -744,7 +744,7 @@ function closeJsonModal() {
     if (jsonModal) jsonModal.style.display = 'none';
 }
 
-// 打开流程图草图大图 Modal
+// 打开流程图草图大图 Modal（渲染失败时显示提示 + 原始 Mermaid 源码）
 function openFlowSketchModal(mermaidSource) {
     if (!flowSketchModal || !flowSketchContent) return;
     flowSketchContent.innerHTML = '<pre class="mermaid">' + esc(mermaidSource) + '</pre>';
@@ -754,9 +754,17 @@ function openFlowSketchModal(mermaidSource) {
         try {
             const nodes = flowSketchContent.querySelectorAll('.mermaid');
             if (nodes.length) {
-                window.mermaid.run({ nodes }).catch(() => {});
+                window.mermaid.run({ nodes }).catch(function (err) {
+                    flowSketchContent.innerHTML =
+                        '<p class="flow-sketch-error-hint">流程图渲染失败（可能是内容含特殊字符），请查看下方源码或复制到 <a href="https://mermaid.live" target="_blank" rel="noopener">mermaid.live</a> 排查。</p>' +
+                        '<pre class="flow-sketch-raw-source">' + esc(mermaidSource) + '</pre>';
+                });
             }
-        } catch (_) {}
+        } catch (_) {
+            flowSketchContent.innerHTML =
+                '<p class="flow-sketch-error-hint">流程图渲染失败，请查看下方源码。</p>' +
+                '<pre class="flow-sketch-raw-source">' + esc(mermaidSource) + '</pre>';
+        }
     }
 }
 

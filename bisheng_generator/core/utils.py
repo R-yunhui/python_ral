@@ -14,6 +14,29 @@ def _mermaid_sanitize_id(node_id: str) -> str:
     return s if s else "n"
 
 
+# Mermaid 11.x 在 flowchart 节点/边标签中会解析 ] [ | " 等，需替换为安全字符
+_MERMAID_LABEL_UNSAFE = re.compile(r'[\]\[|"#;:{}\\]')
+_MERMAID_BRANCH_UNSAFE = re.compile(r'[|\[\]#;:{}]')
+
+
+def _mermaid_escape_label(text: str, max_len: int = 50) -> str:
+    """将节点标签转为 Mermaid 安全文本（避免 Syntax error in text）。"""
+    s = str(text).strip() or ""
+    s = s.replace("\\", "\\\\").replace('"', "'").replace("\n", " ").replace("\r", " ")
+    s = _MERMAID_LABEL_UNSAFE.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:max_len] if s else " "
+
+
+def _mermaid_escape_branch(text: str, max_len: int = 30) -> str:
+    """将边 branch 转为 Mermaid 安全文本（-->|...| 中不能含 | 等）。"""
+    s = str(text).strip() or ""
+    s = s.replace('"', "'").replace("\n", " ").replace("\r", " ")
+    s = _MERMAID_BRANCH_UNSAFE.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:max_len] if s else " "
+
+
 def sketch_to_mermaid(sketch: Dict[str, Any]) -> str:
     """
     将流程图草图（nodes + edges）转为 Mermaid flowchart 字符串，供前端渲染。
@@ -41,12 +64,7 @@ def sketch_to_mermaid(sketch: Dict[str, Any]) -> str:
         label = (n.get("label") or n.get("type") or nid).strip()
         if not label:
             label = nid
-        label_esc = (
-            str(label)
-            .replace("\\", "\\\\")
-            .replace('"', "'")
-            .replace("\n", " ")
-        )[:50]
+        label_esc = _mermaid_escape_label(label, 50)
         lines.append(f'    {safe}["{label_esc}"]')
     for e in edges:
         if not isinstance(e, dict):
@@ -59,7 +77,7 @@ def sketch_to_mermaid(sketch: Dict[str, Any]) -> str:
         safe_tgt = id_to_safe.get(tgt, _mermaid_sanitize_id(tgt))
         branch = e.get("branch")
         if branch and str(branch).strip():
-            branch_esc = str(branch).strip().replace('"', "'")[:30]
+            branch_esc = _mermaid_escape_branch(branch, 30)
             lines.append(f"    {safe_src} -->|{branch_esc}| {safe_tgt}")
         else:
             lines.append(f"    {safe_src} --> {safe_tgt}")

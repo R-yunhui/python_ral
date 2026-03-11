@@ -1204,11 +1204,23 @@ class WorkflowAgent:
                     )
 
     def _normalize_edges(self, w: Dict[str, Any]) -> None:
+        nodes = w.get("nodes", [])
+        source_node_type = {
+            n.get("id"): (n.get("data") or {}).get("type") for n in nodes if n.get("id")
+        }
         for e in w.get("edges", []):
             e.setdefault("type", "customEdge")
             e.setdefault("animated", True)
-            e.setdefault("sourceHandle", "right_handle")
             e.setdefault("targetHandle", "left_handle")
+            src = e.get("source")
+            src_type = source_node_type.get(src) if src else None
+            if src_type == "start":
+                e.setdefault("sourceHandle", "start")
+            elif src_type == "condition":
+                e.setdefault("sourceHandle", "right_handle")
+            else:
+                # input / llm / tool / knowledge_retriever / code 等：毕昇画布出口为 right_handle，避免误用 start 导致导入后缺边
+                e["sourceHandle"] = "right_handle" if e.get("sourceHandle") in (None, "start") else e["sourceHandle"]
             if "id" not in e and "source" in e and "target" in e:
                 sh = e.get("sourceHandle", "right_handle")
                 th = e.get("targetHandle", "left_handle")

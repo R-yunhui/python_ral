@@ -692,6 +692,18 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
   line-height:1.65;overflow:auto;flex:1;margin:0;
 }
 
+/* 流程图草图大图弹窗：渲染失败时的提示与源码 */
+#flowSketchContent{padding:16px 20px;overflow:auto;flex:1}
+.flow-sketch-error-hint{
+  font-size:13px;color:var(--c-sub);margin:0 0 12px;line-height:1.5;
+}
+.flow-sketch-error-hint a{color:var(--primary);text-decoration:underline}
+.flow-sketch-raw-source{
+  white-space:pre-wrap;word-break:break-all;font-size:12px;font-family:var(--f-m);
+  background:var(--bg-code);color:var(--c-sub);padding:12px;border-radius:var(--r-s);
+  margin:0;overflow:auto;max-height:60vh;
+}
+
 /* ── Toast ───────────────────────────────────────────────── */
 .toast-wrap{
   position:fixed;bottom:150px;left:50%;transform:translateX(-50%);
