@@ -1,0 +1,19 @@
+# 毕昇工作流生成器 - 由 compose 从 Dockerfile 构建并启动
+# 启动（自动构建）：docker-compose up -d --build
+# 查看日志：docker-compose logs -f
+
+services:
+  bisheng-generator:
+    build:
+      context: .
+      dockerfile: dockerfile
+    image: bisheng-generator:latest
+    container_name: bisheng-generator
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    volumes:
+      # 日志目录挂载到宿主机，便于查看与持久化
+      - ./logs:/app/log
+    restart: unless-stopped

@@ -29,7 +29,7 @@ from asyncio import Queue
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -48,7 +48,12 @@ from services.session_timeline_service import (
     save_timeline_progress_event,
     list_sessions as list_sessions_svc,
     get_session_timeline as get_session_timeline_svc,
+    delete_session as delete_session_svc,
+    is_session_deleted as is_session_deleted_svc,
 )
+
+# 当前正在执行流式生成的 session_id 集合，用于列表展示「是否执行中」
+_running_session_ids: set = set()
 
 # 日志在独立模块配置，避免 api 内堆积
 setup_logging(
@@ -67,18 +72,21 @@ _global_orchestrator: Optional[WorkflowOrchestrator] = None
 def get_orchestrator(
     config_obj: Optional[dict] = None,
     progress_callback=None,
+    checkpointer=None,
 ) -> WorkflowOrchestrator:
     """
     获取（或初始化）全局 WorkflowOrchestrator 实例。
 
-    - 首次调用时创建实例并构建 LangGraph（带 InMemorySaver）
+    - 首次调用时创建实例并构建 LangGraph（MySQL 已配置时用 checkpointer，否则 InMemorySaver）
     - 后续调用复用同一个实例，仅更新 progress_callback
     """
     global _global_orchestrator
 
     if _global_orchestrator is None:
         _global_orchestrator = WorkflowOrchestrator(
-            config_obj=config_obj, progress_callback=progress_callback
+            config_obj=config_obj,
+            progress_callback=progress_callback,
+            checkpointer=checkpointer,
         )
     else:
         # 更新进度回调，避免仍指向上一次请求
@@ -90,11 +98,28 @@ def get_orchestrator(
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    """FastAPI 生命周期：数据库启用时（MySQL 或 SQLite）自动创建表。"""
+    """FastAPI 生命周期：数据库启用时（MySQL 或 SQLite）自动创建表；MySQL 已配置时创建 LangGraph checkpointer。"""
     if config.is_db_enabled():
         from db.database import init_db
         init_db(config)
-    yield
+
+    if config.is_mysql_configured():
+        from infrastructure.checkpoint import build_mysql_checkpoint_uri, make_checkpoint_serde
+        from langgraph.checkpoint.mysql.asyncmy import AsyncMySaver
+
+        uri = build_mysql_checkpoint_uri(config)
+        if uri:
+            serde = make_checkpoint_serde()
+            async with AsyncMySaver.from_conn_string(uri, serde=serde) as checkpointer:
+                await checkpointer.setup()
+                app_instance.state.checkpointer = checkpointer
+                yield
+        else:
+            app_instance.state.checkpointer = None
+            yield
+    else:
+        app_instance.state.checkpointer = None
+        yield
 
 
 # 创建 FastAPI 应用
@@ -126,6 +151,7 @@ class GenerateRequest(BaseModel):
     query: str
     config: Optional[dict] = None
     session_id: Optional[str] = Field(default=None, alias="sessionId")
+    thread_id: Optional[str] = Field(default=None, alias="threadId")
     is_resume: bool = Field(default=False, alias="isResume")
     original_query: Optional[str] = Field(default=None, alias="originalQuery")
 
@@ -179,10 +205,12 @@ def _get_access_token(request: Request) -> str:
 @app.get("/api/sessions")
 async def get_sessions(limit: int = 100):
     """
-    获取会话列表，按最后活动时间倒序。
-    仅当 MySQL 已配置时返回数据，否则返回空列表。
+    获取会话列表，按最后活动时间倒序。已软删除的会话不返回。
+    每条会话包含 is_executing：该会话是否正在执行流式生成。
     """
     sessions = list_sessions_svc(config, limit=limit)
+    for s in sessions:
+        s["is_executing"] = (s.get("session_id") or "") in _running_session_ids
     return sessions
 
 
@@ -190,10 +218,25 @@ async def get_sessions(limit: int = 100):
 async def get_session_detail(session_id: str, limit: int = 500):
     """
     获取某会话的完整时间线（对话消息 + 推送的进度事件）。
-    仅当 MySQL 已配置时返回数据，否则返回空列表。
+    已软删除的会话返回 404。
     """
+    if is_session_deleted_svc(config, session_id):
+        raise HTTPException(status_code=404, detail="会话已删除")
     timeline = get_session_timeline_svc(config, session_id, limit=limit)
     return {"session_id": session_id, "timeline": timeline}
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """
+    软删除会话：标记为已删除，该会话不再出现在列表且不可续轮。
+    """
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id 不能为空")
+    ok = delete_session_svc(config, session_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail="删除会话失败（可能未启用数据库）")
+    return Response(status_code=204)
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
@@ -210,6 +253,7 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
     """
     token = _get_access_token(fastapi_request)
     session_id = request.session_id or uuid.uuid4().hex
+    thread_id = getattr(request, "thread_id", None)
     is_resume = request.is_resume
 
     logger.info(
@@ -225,8 +269,10 @@ async def generate_workflow(request: GenerateRequest, fastapi_request: Request):
         raise HTTPException(status_code=400, detail="续轮请求必须携带 sessionId")
     if is_resume and (not request.query or not request.query.strip()):
         raise HTTPException(status_code=400, detail="请输入补充信息")
+    if is_resume and is_session_deleted_svc(config, session_id):
+        raise HTTPException(status_code=400, detail="会话已删除，无法续轮")
 
-    graph_config = {"configurable": {"thread_id": session_id}}
+    graph_config = {"configurable": {"thread_id": thread_id or session_id}}
 
     try:
         orchestrator = WorkflowOrchestrator(request.config)
@@ -452,6 +498,7 @@ async def generate_workflow_stream(
     user_query = ""
     request_config = None
     session_id = None
+    thread_id = None
     is_resume = False
     original_user_input = None
 
@@ -459,14 +506,17 @@ async def generate_workflow_stream(
         user_query = request.query
         request_config = request.config
         session_id = request.session_id
+        thread_id = getattr(request, "thread_id", None)
         is_resume = request.is_resume
         original_user_input = request.original_query
     else:
         user_query = query or ""
-        # GET 时从 query_params 读取 session_id、is_resume、original_query
+        # GET 时从 query_params 读取 session_id、thread_id、is_resume、original_query
         params = fastapi_request.query_params
         if params.get("session_id"):
             session_id = params.get("session_id")
+        if params.get("thread_id"):
+            thread_id = params.get("thread_id")
         if params.get("is_resume", "").lower() in ("true", "1", "yes"):
             is_resume = True
         if params.get("original_query"):
@@ -486,6 +536,9 @@ async def generate_workflow_stream(
         return StreamingResponse(error_generator(), media_type="text/event-stream")
 
     session_id = session_id or uuid.uuid4().hex
+
+    if is_resume and is_session_deleted_svc(config, session_id):
+        raise HTTPException(status_code=400, detail="会话已删除，无法续轮")
 
     logger.info(
         "收到流式生成请求，query=%s, session_id=%s, is_resume=%s",
@@ -507,6 +560,7 @@ async def generate_workflow_stream(
         await event_queue.put(event)
 
     async def event_generator() -> AsyncGenerator[str, None]:
+        _running_session_ids.add(session_id)
         try:
             # 首轮请求时发送「开始生成工作流」进度事件；续轮时直接从中断处继续
             if not is_resume:
@@ -531,12 +585,14 @@ async def generate_workflow_stream(
             )
             generate_task = asyncio.create_task(
                 run_generation(
+                    fastapi_request,
                     user_query,
                     request_config,
                     progress_callback,
                     access_token=token,
                     base_url=config.bisheng_base_url,
                     session_id=session_id,
+                    thread_id=thread_id,
                     is_resume=is_resume,
                     original_user_input=original_user_input,
                 )
@@ -621,6 +677,8 @@ async def generate_workflow_stream(
                 except Exception as save_err:
                     logger.warning("写入会话进度事件失败: %s", save_err)
             yield f"data: {json.dumps(error_event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+        finally:
+            _running_session_ids.discard(session_id)
 
     response = StreamingResponse(
         event_generator(),
@@ -643,12 +701,14 @@ async def generate_workflow_stream(
 
 
 async def run_generation(
+    request: Request,
     query: str,
     request_config: Optional[dict],
     progress_callback,
     access_token: Optional[str] = None,
     base_url: str = "",
     session_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
     is_resume: bool = False,
     original_user_input: Optional[str] = None,
 ) -> dict:
@@ -656,12 +716,14 @@ async def run_generation(
     执行生成任务（支持首轮/续轮）
 
     Args:
+        request: FastAPI Request（用于 app.state.checkpointer）
         query: 用户查询（续轮时为用户澄清回复）
         request_config: 请求体中的 config
         progress_callback: 进度回调
         access_token: 毕昇 access_token
         base_url: 毕昇 API base_url
-        session_id: 会话 ID
+        session_id: 会话 ID（时间线、列表、记录等）
+        thread_id: 可选，LangGraph checkpointer 的 thread_id，未传则用 session_id
         is_resume: 是否为续轮
         original_user_input: 首轮用户输入（续轮时必传，用于恢复 state）
 
@@ -675,11 +737,14 @@ async def run_generation(
         is_resume,
     )
 
-    graph_config = {"configurable": {"thread_id": session_id}} if session_id else {}
+    effective_thread_id = thread_id or session_id
+    graph_config = {"configurable": {"thread_id": effective_thread_id}} if effective_thread_id else {}
 
     try:
         orchestrator = get_orchestrator(
-            config_obj=request_config, progress_callback=progress_callback
+            config_obj=request_config,
+            progress_callback=progress_callback,
+            checkpointer=getattr(request.app.state, "checkpointer", None),
         )
         # 知识库在知识库匹配节点内惰性加载，此处不再预加载
         result = await orchestrator.generate_with_progress(

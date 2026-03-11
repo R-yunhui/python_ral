@@ -248,8 +248,7 @@ class KnowledgeAgent:
         ]
 
         if not matched_knowledge_bases and intent.needs_knowledge:
-            logger.warning("知识库匹配无结果，使用默认 Top-2")
-            matched_knowledge_bases = self.knowledge_catalog[:2]
+            logger.warning("知识库匹配无结果，返回空")
 
         # 生成检索配置
         retrieval_config = result.get("retrieval_config", {})

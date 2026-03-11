@@ -42,6 +42,7 @@ const flowSketchModalClose = $('flowSketchModalCloseBtn');
 let currentWorkflow      = null;
 let currentFilename      = null;
 let currentSessionId     = null;
+let currentThreadId      = null;
 let appState             = 'idle';
 let pendingClarification = null;
 let currentProgressEl    = null;
@@ -56,6 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bind();
     loadToken();
     initTextarea();
+    updateInputState();
     if (window.mermaid) {
         try {
             window.mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
@@ -142,22 +144,27 @@ function bind() {
 
 // ==================== Generate ====================
 async function handleGenerate() {
+    // 流程方案选择时只允许点击「使用该方案」，不允许输入
+    if (appState === 'needs_clarification' && pendingClarification?.type === 'flow_sketch_selection') return;
     const q = queryInput.value.trim();
     if (!q) { showErr(appState === 'needs_clarification' ? '请输入补充信息' : '请输入工作流需求描述'); return; }
     hideErr(); removeWelcome(); closePanels();
 
     if (appState === 'needs_clarification') {
         addUser(q); clearInput(); setInputIdle(); appState = 'streaming'; setLoading(true);
+        updateInputState();
         const orig = (pendingClarification && pendingClarification.original_user_input) || '';
-        try { await stream(q, currentSessionId, true, orig); } catch(e) { showErr('续轮失败：'+e.message); addError(e.message); }
-        setLoading(false); return;
+        try { await stream(q, currentSessionId, currentThreadId, true, orig); } catch(e) { showErr('续轮失败：'+e.message); addError(e.message); }
+        setLoading(false); updateInputState(); return;
     }
 
     hideResult(); appState = 'streaming'; setLoading(true);
+    updateInputState();
     if (!currentSessionId) currentSessionId = uid();
+    if (!currentThreadId) currentThreadId = uid();
     addUser(q); clearInput();
-    try { await stream(q, currentSessionId, false); } catch(e) { showErr('生成失败：'+e.message); addError(e.message); }
-    setLoading(false);
+    try { await stream(q, currentSessionId, currentThreadId, false); } catch(e) { showErr('生成失败：'+e.message); addError(e.message); }
+    setLoading(false); updateInputState();
 }
 
 function clearInput() { if (queryInput) { queryInput.value = ''; queryInput.style.height = 'auto'; } }
@@ -171,11 +178,12 @@ function closePanels() {
 }
 
 // ==================== SSE ====================
-function stream(query, sid, resume, originalQuery) {
+function stream(query, sid, threadId, resume, originalQuery) {
     return new Promise((resolve, reject) => {
         if (eventSource) { eventSource.close(); eventSource = null; }
         const p = new URLSearchParams({ query });
         if (sid) p.set('session_id', sid);
+        if (threadId) p.set('thread_id', threadId);
         if (resume) {
             p.set('is_resume', 'true');
             if (originalQuery) p.set('original_query', originalQuery);
@@ -198,7 +206,7 @@ function stream(query, sid, resume, originalQuery) {
                     collapseProc();
                     // 区分「意图澄清」与「流程图草图多方案选择」
                     if (pendingClarification && pendingClarification.type === 'flow_sketch_selection') {
-                        updateProg('等待选择流程图草图方案');
+                        updateProg('等待选择流程方案');
                         addFlowSketchSelection(pendingClarification);
                         setInputFlowSketchSelection();
                     } else {
@@ -207,10 +215,12 @@ function stream(query, sid, resume, originalQuery) {
                         setInputClarify();
                     }
                     setLoading(false);
+                    updateInputState();
                     resolve(); return;
                 }
                 if (d.event_type === 'complete') {
                     done = true; closeSSE();
+                    currentThreadId = null;
                     const payload = d.data || {};
                     const hasWorkflow = payload.workflow || payload.status === 'success';
                     if (hasWorkflow) {
@@ -227,13 +237,16 @@ function stream(query, sid, resume, originalQuery) {
                         addResult(resultData);
                         showResult(resultData);
                         appState = 'completed';
-                    } else { showErr(d.message || '生成失败'); updateProg('失败'); finishProc('err'); }
-                    setLoading(false); resolve(); return;
+                    } else { showErr(d.message || '生成失败'); updateProg('失败'); finishProc('err'); appState = 'idle'; }
+                    setLoading(false); updateInputState(); resolve(); return;
                 }
                 if (d.event_type === 'error') {
                     done = true; closeSSE();
+                    currentThreadId = null;
+                    appState = 'idle';
                     showErr(d.message || d.error || '生成失败');
                     updateProg('失败'); finishProc('err'); setLoading(false);
+                    updateInputState();
                     reject(new Error(d.message || d.error || '生成失败')); return;
                 }
                 if (!progShown) { addProg(); progShown = true; }
@@ -241,7 +254,7 @@ function stream(query, sid, resume, originalQuery) {
             } catch(_){}
         };
         eventSource.onerror = () => {
-            if (!done) { closeSSE(); setLoading(false); reject(new Error('连接服务器失败')); }
+            if (!done) { appState = 'idle'; closeSSE(); setLoading(false); updateInputState(); reject(new Error('连接服务器失败')); }
         };
     });
 }
@@ -380,14 +393,15 @@ function updateStep(card, agent, status, msg, dur, details) {
     if (details && details.flow_sketch_mermaid && typeof window.mermaid !== 'undefined' && collapse) {
         let mwrap = collapse.querySelector('.step-mermaid');
         if (!mwrap) {
+            const mermaidSrc = sanitizeMermaidForRender(details.flow_sketch_mermaid);
             mwrap = document.createElement('div');
             mwrap.className = 'step-mermaid res-mermaid-wrap mermaid-collapsible';
             mwrap.innerHTML =
                 '<div class="mermaid-toggle-bar">' +
-                    '<span class="mermaid-toggle-label">流程图草图</span>' +
+                    '<span class="mermaid-toggle-label">流程示意</span>' +
                     '<svg class="mermaid-chevron" width="14" height="14" viewBox="0 0 14 14"><path d="M5.25 2.9l4.1 4.1-4.1 4.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
                 '</div>' +
-                '<div class="mermaid-content"><pre class="mermaid">' + esc(details.flow_sketch_mermaid) + '</pre></div>';
+                '<div class="mermaid-content"><pre class="mermaid">' + esc(mermaidSrc) + '</pre></div>';
             collapse.appendChild(mwrap);
             li.classList.add('has-details');
             mwrap.querySelector('.mermaid-toggle-bar')?.addEventListener('click', function(e) {
@@ -410,10 +424,20 @@ function collapseProc() {
 
 function finishProc(status) {
     if (!currentProgressEl) return;
-    const card = currentProgressEl.querySelector('.proc-card');
+    finishProgressCard(currentProgressEl, status);
+}
+
+/** 将进度卡片标记为完成或失败（用于回放时间线或 finishProc）。完成时进度条显示 100%。 */
+function finishProgressCard(msgProgressEl, status) {
+    if (!msgProgressEl) return;
+    const card = msgProgressEl.querySelector('.proc-card');
     if (!card) return;
     const icon = card.querySelector('.proc-icon');
     if (status === 'done') {
+        const fill = card.querySelector('.proc-bar-fill');
+        if (fill) fill.style.width = '100%';
+        const sub = card.querySelector('.proc-sub');
+        if (sub) sub.textContent = '100%';
         card.classList.add('done');
         if (icon) { icon.className = 'proc-icon done'; icon.textContent = '✅'; }
     } else if (status === 'err') {
@@ -432,8 +456,8 @@ function addUser(txt) {
     chatMessages.appendChild(el); scroll();
 }
 
-function addProg() {
-    procStepCount = 0; procLastAgent = '';
+/** 创建进度卡片 DOM（与 addProg 一致），用于回放时间线时复用同一风格。返回外层 .msg-progress 元素，其内 .proc-card 可传给 addStep/updateStep */
+function createProgressCardElement() {
     const el = document.createElement('div');
     el.className = 'msg msg-progress';
     el.innerHTML =
@@ -449,11 +473,17 @@ function addProg() {
             '<div class="proc-bar"><div class="proc-bar-fill"></div></div>' +
             '<div class="proc-body"><ul class="proc-steps"></ul></div>' +
         '</div>';
-    chatMessages.appendChild(el);
-    currentProgressEl = el;
     el.querySelector('.proc-head')?.addEventListener('click', () => {
         el.querySelector('.proc-card')?.classList.toggle('collapsed');
     });
+    return el;
+}
+
+function addProg() {
+    procStepCount = 0; procLastAgent = '';
+    const el = createProgressCardElement();
+    chatMessages.appendChild(el);
+    currentProgressEl = el;
     scroll();
 }
 
@@ -488,11 +518,11 @@ function addClarify(p) {
 
 // 流程图草图多方案选择（flow_sketch_selection）
 function addFlowSketchSelection(p) {
-    const msg = p.message || '已生成多份流程图草图方案，请选择一个用于后续完整工作流生成。';
+    const msg = p.message || '我们为当前需求准备了三种不同复杂度的流程方案，请选择一种继续生成。';
     const opts = Array.isArray(p.options) ? p.options : [];
 
     let h = '<div class="bubble flow-sketch-bubble">';
-    h += '<div class="clarify-tag">候选草图</div>';
+    h += '<div class="clarify-tag">流程方案</div>';
     h += '<div class="flow-sketch-msg">' + esc(msg) + '</div>';
 
     if (opts.length) {
@@ -502,7 +532,7 @@ function addFlowSketchSelection(p) {
             const title = o.title || id || '候选方案';
             const desc = o.description || '';
             const nodesCount = o.nodes_count != null ? o.nodes_count : null;
-            const mermaid = o.mermaid || '';
+            const mermaid = sanitizeMermaidForRender(o.mermaid || '');
 
             h += '<div class="flow-variant" data-id="' + esc(id) + '">';
             // 头部：一行展示标题 + meta + 折叠箭头
@@ -512,10 +542,7 @@ function addFlowSketchSelection(p) {
             h += '    </div>';
             h += '    <div class="flow-variant-meta">';
             if (nodesCount != null) {
-                h += '      <span class="flow-meta-pill">节点数·' + nodesCount + '</span>';
-            }
-            if (id) {
-                h += '      <span class="flow-meta-pill flow-meta-id">' + esc(id) + '</span>';
+                h += '      <span class="flow-meta-pill">步骤数·' + nodesCount + '</span>';
             }
             h += '    </div>';
             h += '    <button type="button" class="flow-variant-toggle" aria-label="展开/收起">';
@@ -614,22 +641,26 @@ function addFlowSketchSelection(p) {
 function resumeWithSelection(choiceId, title) {
     if (!choiceId) return;
     hideErr(); removeWelcome(); closePanels();
+    // 选中后禁用所有「使用该方案」按钮，避免重复选择
+    document.querySelectorAll('.msg-flow-sketch ._pick-variant').forEach(btn => { btn.disabled = true; });
     const orig = (pendingClarification && pendingClarification.original_user_input) || '';
 
-    // 在对话中补充一条“选择方案”的用户消息，便于回溯
     const label = title || choiceId;
-    addUser('选择流程图方案：' + label);
+    addUser('已选方案：' + label);
     clearInput();
 
     appState = 'streaming';
     setLoading(true);
-    stream(choiceId, currentSessionId, true, orig)
+    updateInputState();
+    stream(choiceId, currentSessionId, currentThreadId, true, orig)
         .catch(e => {
             showErr('续轮失败：' + e.message);
             addError(e.message);
+            appState = 'idle';
         })
         .finally(() => {
             setLoading(false);
+            updateInputState();
         });
 }
 
@@ -681,24 +712,33 @@ function addError(msg) {
 }
 
 // ==================== Input state ====================
-function setInputIdle() {
-    if (queryInput) queryInput.placeholder = '描述你想创建的工作流...';
-    if (inputHint) inputHint.textContent = 'Enter 发送 · Shift+Enter 换行';
-}
-function setInputClarify() {
-    if (queryInput) { queryInput.placeholder = '请补充信息以继续…'; queryInput.focus(); }
-    if (inputHint) inputHint.textContent = '输入补充信息后按 Enter 发送';
+/** 仅需求澄清（意图补充）时允许输入；流程方案选择、生成中均禁止输入，只能点击「使用该方案」。 */
+function updateInputState() {
+    const onlyClick = appState === 'needs_clarification' && pendingClarification?.type === 'flow_sketch_selection';
+    const disallow = appState === 'streaming' || onlyClick;
+    if (queryInput) queryInput.disabled = disallow;
+    if (generateBtn) generateBtn.disabled = disallow;
 }
 
-// 针对流程图草图多方案选择的输入提示
+function setInputIdle() {
+    if (queryInput) { queryInput.placeholder = '描述你想创建的工作流...'; queryInput.disabled = false; }
+    if (inputHint) inputHint.textContent = 'Enter 发送 · Shift+Enter 换行';
+    if (generateBtn) generateBtn.disabled = false;
+}
+function setInputClarify() {
+    if (queryInput) { queryInput.placeholder = '请补充信息以继续…'; queryInput.disabled = false; queryInput.focus(); }
+    if (inputHint) inputHint.textContent = '输入补充信息后按 Enter 发送';
+    if (generateBtn) generateBtn.disabled = false;
+}
+
+// 流程方案选择时：禁止输入，仅允许点击「使用该方案」
 function setInputFlowSketchSelection() {
     if (queryInput) {
-        queryInput.placeholder = '推荐直接点击上方方案卡片，也可以在此输入方案 ID（如 simple_exec_first）继续…';
-        queryInput.focus();
+        queryInput.placeholder = '请点击上方某一方案卡片中的「使用该方案」按钮继续';
+        queryInput.disabled = true;
     }
-    if (inputHint) {
-        inputHint.textContent = '点击候选方案卡片即可继续，或输入方案 ID 后按 Enter';
-    }
+    if (inputHint) inputHint.textContent = '点击方案卡片中的「使用该方案」即可继续';
+    if (generateBtn) generateBtn.disabled = true;
 }
 function newSession() {
     if (chatMessages) {
@@ -719,8 +759,9 @@ function newSession() {
             c.addEventListener('click', () => { if (queryInput) { queryInput.value = c.dataset.q || ''; queryInput.focus(); } });
         });
     }
-    currentSessionId = null; appState = 'idle'; pendingClarification = null; currentProgressEl = null;
+    currentSessionId = null; currentThreadId = null; appState = 'idle'; pendingClarification = null; currentProgressEl = null;
     setInputIdle(); hideErr(); hideResult(); setLoading(false);
+    updateInputState();
 }
 
 // ==================== UI Helpers ====================
@@ -744,10 +785,19 @@ function closeJsonModal() {
     if (jsonModal) jsonModal.style.display = 'none';
 }
 
+/** 渲染前清理 Mermaid 源码：去掉控制字符、BOM 等，减少「含特殊字符」导致的渲染失败 */
+function sanitizeMermaidForRender(src) {
+    if (src == null) return '';
+    const s = String(src);
+    // 去掉控制字符、BOM、零宽字符等，保留 \t \n \r
+    return s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufeff\u200b-\u200d]/g, '').trim();
+}
+
 // 打开流程图草图大图 Modal（渲染失败时显示提示 + 原始 Mermaid 源码）
 function openFlowSketchModal(mermaidSource) {
     if (!flowSketchModal || !flowSketchContent) return;
-    flowSketchContent.innerHTML = '<pre class="mermaid">' + esc(mermaidSource) + '</pre>';
+    const raw = sanitizeMermaidForRender(mermaidSource);
+    flowSketchContent.innerHTML = '<pre class="mermaid">' + esc(raw) + '</pre>';
     flowSketchModal.style.display = 'flex';
 
     if (window.mermaid) {
@@ -757,13 +807,13 @@ function openFlowSketchModal(mermaidSource) {
                 window.mermaid.run({ nodes }).catch(function (err) {
                     flowSketchContent.innerHTML =
                         '<p class="flow-sketch-error-hint">流程图渲染失败（可能是内容含特殊字符），请查看下方源码或复制到 <a href="https://mermaid.live" target="_blank" rel="noopener">mermaid.live</a> 排查。</p>' +
-                        '<pre class="flow-sketch-raw-source">' + esc(mermaidSource) + '</pre>';
+                        '<pre class="flow-sketch-raw-source">' + esc(raw) + '</pre>';
                 });
             }
         } catch (_) {
             flowSketchContent.innerHTML =
                 '<p class="flow-sketch-error-hint">流程图渲染失败，请查看下方源码。</p>' +
-                '<pre class="flow-sketch-raw-source">' + esc(mermaidSource) + '</pre>';
+                '<pre class="flow-sketch-raw-source">' + esc(raw) + '</pre>';
         }
     }
 }
@@ -832,13 +882,16 @@ function showSessionDetail() {
     if (historyPanelTitle) historyPanelTitle.textContent = '会话详情';
 }
 
-/** 将时间线重放到主对话框，含完整结果卡片（导入/打开对话/编辑工作流） */
+/** 将时间线重放到主对话框，与正常对话风格一致：消息用气泡，进度用与实时相同的进度卡片 + 步骤 */
 function renderTimelineIntoMainArea(timeline) {
     if (!chatMessages) return;
     chatMessages.innerHTML = '';
     if (!timeline.length) return;
 
     let lastCompleteData = null;
+    let replayCardWrapper = null;
+    let replayCard = null;
+
     for (const item of timeline) {
         const payload = item.payload || {};
         if (item.item_type === 'message') {
@@ -851,21 +904,56 @@ function renderTimelineIntoMainArea(timeline) {
         if (item.item_type === 'progress_event') {
             const ev = payload;
             const eventType = ev.event_type || '';
+            const msg = ev.message || '';
+            const agentName = ev.agent_name || '';
+            const durationMs = ev.duration_ms;
+            const ed = ev.data;
+
             if (eventType === 'needs_clarification' && ev.data && ev.data.pending_clarification) {
+                replayCardWrapper = null;
+                replayCard = null;
                 addClarify(ev.data.pending_clarification);
             } else if (eventType === 'complete' && ev.data && ev.data.workflow) {
+                if (replayCardWrapper) {
+                    finishProgressCard(replayCardWrapper, 'done');
+                    replayCardWrapper = null;
+                    replayCard = null;
+                }
                 lastCompleteData = ev.data;
                 addResult(ev.data);
             } else if (eventType === 'error' && ev.error) {
+                if (replayCardWrapper) {
+                    finishProgressCard(replayCardWrapper, 'err');
+                    replayCardWrapper = null;
+                    replayCard = null;
+                }
                 addError(ev.error);
-            } else if (eventType && eventType !== 'start' && eventType !== 'complete') {
-                const el = document.createElement('div');
-                el.className = 'msg msg-ast';
-                el.innerHTML = '<div class="bubble tl-ev-inline">' +
-                    '<span class="tl-ev-type">' + esc(eventType) + '</span>' +
-                    (ev.agent_name ? ' <span class="tl-ev-agent">' + esc(ev.agent_name) + '</span>' : '') +
-                    (ev.message ? ' — ' + esc(ev.message) : '') + '</div>';
-                chatMessages.appendChild(el);
+            } else if (eventType === 'start' || eventType === 'agent_start' || eventType === 'agent_complete' || eventType === 'agent_error') {
+                if (!replayCardWrapper) {
+                    replayCardWrapper = createProgressCardElement();
+                    chatMessages.appendChild(replayCardWrapper);
+                    replayCard = replayCardWrapper.querySelector('.proc-card');
+                }
+                if (!replayCard) continue;
+
+                if (ev.progress != null) {
+                    const fill = replayCard.querySelector('.proc-bar-fill');
+                    if (fill) fill.style.width = ev.progress + '%';
+                    const sub = replayCard.querySelector('.proc-sub');
+                    if (sub) sub.textContent = Math.round(ev.progress) + '%';
+                }
+                const titleEl = replayCard.querySelector('.proc-title');
+                if (titleEl) titleEl.textContent = msg || (agentName ? '正在执行：' + agentName : '正在生成工作流…');
+
+                if (eventType === 'start') {
+                    addStep(replayCard, '_sys', msg || '开始生成', 'running');
+                } else if (eventType === 'agent_start') {
+                    addStep(replayCard, agentName, msg || ('正在执行：' + agentName), 'running');
+                } else if (eventType === 'agent_complete') {
+                    updateStep(replayCard, agentName, 'success', msg || (agentName + ' 完成'), durationMs, ed);
+                } else if (eventType === 'agent_error') {
+                    updateStep(replayCard, agentName, 'error', msg || (agentName + ' 失败'), durationMs, { error: ev.error });
+                }
             }
         }
     }
@@ -923,8 +1011,10 @@ async function loadSessionDetail(sessionId) {
             return;
         }
         currentSessionId = sessionId;
+        currentThreadId = null;
         appState = 'completed';
         hideErr();
+        updateInputState();
         renderTimelineIntoMainArea(timeline);
         showHistoryList();
         if (sidebar) sidebar.classList.remove('open');

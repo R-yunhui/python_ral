@@ -62,6 +62,7 @@ async def run_workflow_generation(
                 tool_plan=tool_plan,
                 knowledge_match=knowledge_match,
                 flow_sketch=flow_sketch,
+                session_id=state.get("session_id"),
             )
             if isinstance(workflow_result, dict) and "error" in workflow_result:
                 last_error = workflow_result.get(

@@ -8,7 +8,7 @@
 - 最终程序化校验 + 规范化作为安全兜底
 """
 
-from datetime import timezone
+from datetime import timedelta, timezone
 import json
 import logging
 import re
@@ -508,33 +508,39 @@ class WorkflowAgent:
 
     MAX_FIX_ROUNDS = 2
 
-    # 多草图模式下的固定维度配置：id / 标题 / 提示词说明
+    # 多草图模式：按复杂度从高到低呈现（完整版 → 适中版 → 精简版），供用户选择
+    # title/description 为面向非技术用户的展示文案；goal_hint 为给模型的约束说明
     FLOW_SKETCH_DIMENSIONS: List[Dict[str, str]] = [
         {
-            "id": "simple_exec_first",
-            "title": "方案A：上线可执行优先",
+            "id": "full",
+            "title": "完整版",
+            "description": "步骤最全、分支清晰，适合需要区分多种情况、后续还要扩展的场景。",
             "goal_hint": (
-                "在满足所有平台约束的前提下，优先保证「容易在毕昇平台直接上线、实现成本最低」。"
-                "流程应尽量简单、节点数量少、分支不宜过多，避免不必要的 condition 和 code 节点，"
-                "只保留完成需求所必需的知识库检索和工具调用链路，同时保留基础的多轮对话闭环。"
+                "本方案为「完整版」：在满足平台约束的前提下，可设计较完整的流程结构。"
+                "总节点数可控制在 10～12 个，允许多条分支、条件判断与必要的数据处理步骤；"
+                "每条分支可独立连到该分支内的解读/整理节点，再连回输入。"
+                "节点 label 使用口语化短句（如「识别用户意图」「从政策库检索」「匹配政策与企业」）。"
             ),
         },
         {
-            "id": "robust_high_accuracy",
-            "title": "方案B：准确性与鲁棒性优先",
+            "id": "medium",
+            "title": "适中版",
+            "description": "只保留核心步骤和主要分支，结构清晰、便于理解。",
             "goal_hint": (
-                "在满足所有平台约束的前提下，优先保证「检索准确性和结果鲁棒性更高」。"
-                "可以适当增加知识库检索 + LLM 解读/重写的链路，引入必要的 code 节点做 JSON 解析与异常兜底，"
-                "在关键节点前后允许使用少量 condition 节点区分有结果/无结果/低置信度等分支，以提高整体回答质量。"
+                "本方案为「适中版」：在满足平台约束的前提下，只保留核心路径。"
+                "总节点数控制在 7～9 个，分支不宜过多，能用一步说明的不要拆成多步；"
+                "只保留完成需求所必需的知识库检索和工具调用，节点 label 用口语化短句。"
             ),
         },
         {
-            "id": "extensible_future_proof",
-            "title": "方案C：可扩展与可演进优先",
+            "id": "simple",
+            "title": "精简版",
+            "description": "步骤最少、一条主流程，先确认「是不是这个意思」再细化。",
             "goal_hint": (
-                "在满足所有平台约束的前提下，优先保证「结构清晰、便于未来扩展与演进」。"
-                "使用 condition 对不同业务场景进行清晰拆分，每个分支内部预留 1–2 个通用的 LLM 或 code 汇总节点，"
-                "方便后续插入监控、AB 实验或更多工具/知识库调用，同时避免过深的链路嵌套。"
+                "本方案为「精简版」：必须严格简化，便于用户快速确认意图。"
+                "总节点数不得超过 6～7 个；只保留一条主路径，至多 1 个分叉（如：先判断再分两种处理）；"
+                "不要增加多余的条件分支或数据处理步骤，能用 1 个 llm 步骤说清的不要拆成多个；"
+                "节点 label 用口语化短句（如「识别意图」「查政策」「整理结果」）。"
             ),
         },
     ]
@@ -543,9 +549,11 @@ class WorkflowAgent:
         self,
         llm: BaseChatModel,
         prompts_dir: Optional[str] = None,
+        checkpointer=None,
     ):
         self.llm = llm
         self._prompts_dir = prompts_dir
+        self._checkpointer = checkpointer
         self._registry: Optional[SkillRegistry] = None
         self._skill_tools: list = []
         self._catalog: str = ""
@@ -576,6 +584,7 @@ class WorkflowAgent:
         tool_plan: ToolPlan,
         knowledge_match: KnowledgeMatch,
         flow_sketch: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         await self._ensure_initialized()
 
@@ -618,12 +627,12 @@ class WorkflowAgent:
         # 仅使用 skill 工具（get_skill_body、get_skill_reference 等）；校验在生成后由程序化 _validate_workflow_impl + 修复轮完成，避免 agent 在对话中反复调用校验工具导致变慢
         all_tools = list(self._skill_tools)
 
-        checkpointer = InMemorySaver()
+        cp = self._checkpointer if self._checkpointer is not None else InMemorySaver()
         agent = create_agent(
             model=self.llm,
             tools=all_tools,
             system_prompt=system_prompt,
-            checkpointer=checkpointer,
+            checkpointer=cp,
         )
 
         user_msg_tpl = loader.get("workflow", "user_message")
@@ -631,7 +640,7 @@ class WorkflowAgent:
             intent_rewritten_input=intent.rewritten_input
         )
 
-        thread_id = uuid.uuid4().hex
+        thread_id = session_id if session_id else uuid.uuid4().hex
         debug_dir = _WORKFLOW_DEBUG_DIR / thread_id
         usage_cb = UsageMetadataCallbackHandler()
         config = {
@@ -874,11 +883,11 @@ class WorkflowAgent:
         """
         按不同取舍维度生成多份流程图草图备选项，供前端交互选择。
 
-        返回的每个元素结构：
+        返回的每个元素结构（按复杂度从高到低：完整版 → 适中版 → 精简版）：
         {
-            "id": 维度ID（如 simple_exec_first）,
-            "title": 展示用标题,
-            "description": 维度说明,
+            "id": 维度ID（如 full / medium / simple）,
+            "title": 展示用标题（非技术化）,
+            "description": 面向用户的简短说明,
             "sketch": {"nodes": [...], "edges": [...]}
         }
         """
@@ -887,6 +896,8 @@ class WorkflowAgent:
             dim_id = dim.get("id") or ""
             goal_hint = dim.get("goal_hint") or ""
             title = dim.get("title") or dim_id
+            # 面向非技术用户的简短说明，供前端展示
+            user_description = dim.get("description") or ""
             sketch = await self._generate_flow_sketch_once(
                 intent=intent,
                 tool_plan=tool_plan,
@@ -899,7 +910,7 @@ class WorkflowAgent:
                 {
                     "id": dim_id,
                     "title": title,
-                    "description": goal_hint,
+                    "description": user_description,
                     "sketch": sketch,
                 }
             )
@@ -930,7 +941,8 @@ class WorkflowAgent:
         """规范化工作流 JSON，补全毕昇前端必需的字段。"""
         from datetime import datetime
 
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        china_tz = timezone(timedelta(hours=8))
+        now = datetime.now(china_tz).strftime("%Y-%m-%dT%H:%M:%S")
 
         self._normalize_top_level(w, now)
 

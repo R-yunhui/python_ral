@@ -281,7 +281,7 @@ class ProgressEvent(BaseModel):
         
         elif agent_name == AgentName.FLOW_SKETCH:
             nodes_count = data.get("nodes_count", 0)
-            return f"✅ 流程图草图完成：{nodes_count} 个节点"
+            return f"✅ 流程方案已生成：{nodes_count} 个步骤"
         
         elif agent_name == AgentName.WORKFLOW_GENERATION:
             return "✅ 工作流生成完成"

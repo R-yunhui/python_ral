@@ -1,9 +1,17 @@
 """SQLAlchemy 模型：表结构由代码定义，启动时自动创建"""
 
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, JSON
+from datetime import datetime, timezone, timedelta
+from sqlalchemy import Boolean, Column, Integer, String, Text, DateTime, JSON
 
 from db.database import Base
+
+# 中国时区 UTC+8，用于 created_at / deleted_at 等默认时间
+CHINA_TZ = timezone(timedelta(hours=8))
+
+
+def _now_cn():
+    """当前时间（中国时区），供 Column default 使用"""
+    return datetime.now(CHINA_TZ)
 
 
 class WorkflowGenerationRecord(Base):
@@ -20,7 +28,7 @@ class WorkflowGenerationRecord(Base):
     workflow_json = Column(Text, nullable=True, comment="最终工作流 JSON")
     status = Column(String(32), nullable=False, default="success", comment="success / needs_clarification / error")
     error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=_now_cn)
 
 
 class SessionTimeline(Base):
@@ -33,4 +41,15 @@ class SessionTimeline(Base):
     item_type = Column(String(32), nullable=False, comment="message | progress_event")
     sort_key = Column(DateTime, nullable=False, comment="发生时间，用于排序")
     payload = Column(JSON, nullable=False, comment="message: {role,content}; progress_event: 完整事件")
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=_now_cn)
+
+
+class SessionMeta(Base):
+    """会话元信息：软删除标识，删除的会话不再出现在列表且不可续轮"""
+
+    __tablename__ = "session_meta"
+
+    session_id = Column(String(128), primary_key=True, comment="会话 ID")
+    is_deleted = Column(Boolean, nullable=False, default=False, comment="是否已软删除")
+    deleted_at = Column(DateTime, nullable=True, comment="删除时间")
+    created_at = Column(DateTime, nullable=False, default=_now_cn)

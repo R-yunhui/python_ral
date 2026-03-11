@@ -418,6 +418,12 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
   justify-content:flex-end;
   gap:8px;
 }
+.flow-variant-actions button:disabled,
+.flow-variant ._pick-variant:disabled{
+  opacity:0.5;
+  cursor:not-allowed;
+  pointer-events:none;
+}
 
 /* progress card — full width, collapsible */
 .msg-progress{display:block}
@@ -618,6 +624,11 @@ html,body{height:100%;font-family:var(--f-b);font-size:15px;color:var(--c-text);
   flex:1;font-family:var(--f-b);font-size:15px;line-height:1.5;
   border:none;outline:none;resize:none;background:transparent;color:var(--c-text);
   max-height:150px;min-height:22px;padding:7px 0;
+}
+.composer-box textarea:disabled{
+  background:var(--border-l);
+  color:var(--c-muted);
+  cursor:not-allowed;
 }
 .composer-box textarea::placeholder{color:var(--c-muted)}
 

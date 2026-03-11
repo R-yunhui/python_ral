@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
-from db.models import SessionTimeline
+from db.models import SessionTimeline, _now_cn
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class SessionTimelineRepository:
         sort_key: Optional[datetime] = None,
     ) -> SessionTimeline:
         """插入一条时间线记录。调用方负责 commit。"""
-        now = datetime.utcnow()
+        now = _now_cn()
         row = SessionTimeline(
             session_id=session_id,
             item_type=item_type,

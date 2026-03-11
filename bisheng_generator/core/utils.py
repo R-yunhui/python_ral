@@ -18,10 +18,23 @@ def _mermaid_sanitize_id(node_id: str) -> str:
 _MERMAID_LABEL_UNSAFE = re.compile(r'[\]\[|"#;:{}\\]')
 _MERMAID_BRANCH_UNSAFE = re.compile(r'[|\[\]#;:{}]')
 
+# 控制字符与不可见字符（保留 \t \n \r，其余 strip 掉，避免渲染失败）
+_MERMAID_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufeff]")
+
+# 各类引号、弯引号统一为单引号，避免破坏 "label" 边界
+_MERMAID_QUOTE_CHARS = re.compile(r'["\u201c\u201d\u201e\u201f\u2039\u203a]')
+
+
+def _mermaid_normalize_text(s: str) -> str:
+    """去掉控制/不可见字符，弯引号统一为直单引号。"""
+    s = _MERMAID_CONTROL_CHARS.sub("", str(s))
+    s = _MERMAID_QUOTE_CHARS.sub("'", s)
+    return s
+
 
 def _mermaid_escape_label(text: str, max_len: int = 50) -> str:
     """将节点标签转为 Mermaid 安全文本（避免 Syntax error in text）。"""
-    s = str(text).strip() or ""
+    s = _mermaid_normalize_text(str(text)).strip() or ""
     s = s.replace("\\", "\\\\").replace('"', "'").replace("\n", " ").replace("\r", " ")
     s = _MERMAID_LABEL_UNSAFE.sub(" ", s)
     s = re.sub(r"\s+", " ", s).strip()
@@ -30,7 +43,7 @@ def _mermaid_escape_label(text: str, max_len: int = 50) -> str:
 
 def _mermaid_escape_branch(text: str, max_len: int = 30) -> str:
     """将边 branch 转为 Mermaid 安全文本（-->|...| 中不能含 | 等）。"""
-    s = str(text).strip() or ""
+    s = _mermaid_normalize_text(str(text)).strip() or ""
     s = s.replace('"', "'").replace("\n", " ").replace("\r", " ")
     s = _MERMAID_BRANCH_UNSAFE.sub(" ", s)
     s = re.sub(r"\s+", " ", s).strip()

@@ -91,7 +91,7 @@ async def run_flow_sketch(
         pending = {
             "type": "flow_sketch_selection",
             "stage": "flow_sketch",
-            "message": "已为当前需求生成多个流程图草图方案，请选择一个用于后续完整工作流生成。",
+            "message": "我们为当前需求准备了三种不同复杂度的流程方案（完整版 → 适中版 → 精简版），请选择一种继续生成。",
             "options": options,
             "original_user_input": state.get("user_input") or "",
             "intent_rewritten_input": intent.rewritten_input,

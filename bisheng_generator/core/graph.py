@@ -9,7 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from config.config import Config, config
 from models.workflow_state import WorkflowState
-from infrastructure.model_factory import ModelInitializer, create_llm
+from infrastructure.model_factory import ModelInitializer
 from core.nodes import (
     NodeContext,
     run_intent_understanding,
@@ -43,6 +43,7 @@ class WorkflowOrchestrator:
         self,
         config_obj: Optional[Config] = None,
         progress_callback: Optional[ProgressCallback] = None,
+        checkpointer=None,
     ):
         """
         初始化编排器
@@ -50,12 +51,16 @@ class WorkflowOrchestrator:
         Args:
             config_obj: Config 配置对象，如果不传则使用全局配置
             progress_callback: 进度回调函数，用于实时推送事件
+            checkpointer: LangGraph CheckpointSaver，为 None 时使用 InMemorySaver
         """
         # 仅接受 Config 实例，请求体中的 dict 不用于 LLM/编排，统一用全局 config
         self.config = config_obj if isinstance(config_obj, Config) else config
 
         # 保存进度回调函数
         self.progress_callback = progress_callback
+
+        # MySQL 已配置时由 lifespan 注入，未配置时为 None，编译图时回退到 InMemorySaver
+        self.checkpointer = checkpointer
 
         # ========== 初始化模型 ==========
         self.llm = ModelInitializer.get_llm(self.config)
@@ -78,6 +83,7 @@ class WorkflowOrchestrator:
         self.workflow_agent = WorkflowAgent(
             llm_workflow,
             prompts_dir=self.config.prompts_dir or None,
+            checkpointer=self.checkpointer,
         )
 
         self._node_ctx = NodeContext(
@@ -151,8 +157,9 @@ class WorkflowOrchestrator:
         # 工作流生成后结束
         builder.add_edge("workflow_generation", END)
 
-        # 编译图（带 checkpointer 以支持 interrupt / resume）
-        graph = builder.compile(checkpointer=InMemorySaver())
+        # 编译图（带 checkpointer 以支持 interrupt / resume；MySQL 已配置时用持久化，否则内存）
+        checkpointer = self.checkpointer if self.checkpointer is not None else InMemorySaver()
+        graph = builder.compile(checkpointer=checkpointer)
 
         logger.info("LangGraph 构建完成（支持条件路由 + interrupt/resume）")
         return graph

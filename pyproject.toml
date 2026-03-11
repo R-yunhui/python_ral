@@ -13,6 +13,7 @@ dependencies = [
     "langchain-community>=0.4.1",
     "langchain-openai>=1.1.10",
     "langgraph>=1.0.10",
+    "langgraph-checkpoint-mysql[asyncmy]",
     "llama-index>=0.14.15",
     "llama-index-embeddings-langchain>=0.4.1",
     "llama-index-llms-langchain>=0.7.2",
