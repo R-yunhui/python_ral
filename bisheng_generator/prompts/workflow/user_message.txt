@@ -1,3 +1,0 @@
-请根据提供的上下文信息，**创建一个毕昇(Bisheng)的工作流**，输出完整且符合规范的毕昇工作流 JSON。用户需求：{intent_rewritten_input}
-
-输出前请自检：① 每个 tool 节点的 output 是否已在某下游节点（LLM/Code）的输入中引用（如 {{#工具节点ID.output#}}）？② 每个 condition 的各分支是否独立闭环（无多分支汇聚到同一节点）？③ 每个 condition 的 right_handle 是否已连出边？

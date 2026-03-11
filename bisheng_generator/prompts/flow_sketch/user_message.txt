@@ -1,1 +1,0 @@
-请为以下需求设计流程图草图（仅 nodes + edges 的 JSON）：{intent_rewritten_input}
