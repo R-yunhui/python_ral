@@ -32,4 +32,7 @@ dependencies = [
     "langsmith>=0.7.9",
     "python-jose[cryptography]>=3.5.0",
     "passlib[bcrypt]>=1.7.4",
+    "autogen-agentchat>=0.7.5",
+    "autogen-ext[openai]>=0.7.5",
+    "autogenstudio>=0.0.49",
 ]
