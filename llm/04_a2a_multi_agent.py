@@ -214,6 +214,24 @@ def create_writer_card() -> AgentCard:
 
 
 # ============ Orchestrator ============
+async def call_agent(base_url: str, message: str) -> str:
+    """调用指定的 Agent（JSON-RPC transport，blocking message/send）。"""
+    # trust_env=False：避免系统 HTTP 代理把 localhost 转发成 502
+    async with httpx.AsyncClient(timeout=_ORCH_HTTP_TIMEOUT, trust_env=False) as http_client:
+        client = await ClientFactory.connect(
+            base_url,
+            client_config=ClientConfig(
+                httpx_client=http_client,
+                streaming=False,
+            ),
+        )
+        async with client:
+            msg = create_text_message_object(content=message)
+            async for item in client.send_message(msg):
+                return _a2a_reply_text(item)
+    return ""
+
+
 class Orchestrator:
     """协调器 - 调度多个 Agent 协作"""
 
@@ -221,27 +239,6 @@ class Orchestrator:
         self.researcher_url = "http://localhost:10001"
         self.writer_url = "http://localhost:10002"
         self.llm = create_llm()
-
-    async def call_agent(self, base_url: str, message: str) -> str:
-        """调用指定的 Agent（JSON-RPC transport，blocking message/send）。"""
-        # trust_env=False：避免系统 HTTP 代理把 localhost 转发成 502
-        http_client = httpx.AsyncClient(timeout=_ORCH_HTTP_TIMEOUT, trust_env=False)
-        try:
-            client = await ClientFactory.connect(
-                base_url,
-                client_config=ClientConfig(
-                    httpx_client=http_client,
-                    streaming=False,
-                ),
-            )
-        except BaseException:
-            await http_client.aclose()
-            raise
-        async with client:
-            msg = create_text_message_object(content=message)
-            async for item in client.send_message(msg):
-                return _a2a_reply_text(item)
-        return ""
 
     async def orchestrate(self, topic: str) -> str:
         """
@@ -258,13 +255,13 @@ class Orchestrator:
 
         # Step 1: 调用研究员
         print("\n[Step 1] 调用 Researcher Agent...")
-        research_result = await self.call_agent(self.researcher_url, topic)
+        research_result = await call_agent(self.researcher_url, topic)
         print(f"研究结果:\n{research_result[:200]}...\n")
 
         # Step 2: 调用写作者
         print("[Step 2] 调用 Writer Agent...")
         write_prompt = f"主题：{topic}\n\n研究素材：\n{research_result}"
-        article = await self.call_agent(self.writer_url, write_prompt)
+        article = await call_agent(self.writer_url, write_prompt)
         print(f"创作结果:\n{article[:200]}...\n")
 
         # Step 3: 整合结果
