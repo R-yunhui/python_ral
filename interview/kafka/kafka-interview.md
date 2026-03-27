@@ -1,6 +1,6 @@
 # Kafka 高频面试题（架构 · 可靠性 · 运维 · 场景）
 
-> 面向 **Kafka 2.8+ / 3.x**，**KRaft** 与 **ZK 模式** 并存语境；**配置与默认值以集群版本为准**。含**实战场景**、**近年面经高频补充**与自测表；面经方向综合公开技术文章与社区常见考点整理，**仍以官方文档与集群实测为准**。
+> 面向 **Kafka 2.8+ / 3.x / 4.x**。**4.0+ [KRaft-only](https://kafka.apache.org/40/getting-started/zk2kraft/)**；**3.x** 可为 ZK 或 KRaft。含**分层表格式答法**、**（基础补充）**、**实战场景**、**面经补充**与 **自测表**。
 
 ---
 
@@ -19,9 +19,17 @@
 11. [面经高频补充近年](#十一面经高频补充近年)
 12. [自测清单](#十二自测清单)
 
+> **复习主线：** **分区顺序 → ISR/HW → acks+minISR → 消费组与 offset → rebalance → 事务 read_committed → KRaft 元数据 → Lag/URP 监控**。文档：<https://kafka.apache.org/documentation/>
+
 ---
 
 ## 一、架构与核心概念
+
+### Kafka 解决什么问题？（开胃）
+
+**答：** **分布式持久化日志（log）**：**高吞吐追加写**、**分区水平扩展**、**多订阅者独立消费进度**。**与经典 MQ**：更强调 **日志+回放+流处理**，弱 **单条消息的丰富队列语义**（视版本与组件）。**边界：** **单分区内有序**；**全局有序** ≈ **单分区**。
+
+---
 
 ### 1. Kafka 整体架构里各角色做什么？
 
@@ -31,9 +39,9 @@
 - **Broker**：集群节点，持久化 **分区日志（segment）**，处理 **生产/拉取请求**；副本间 **同步 ISR**。  
 - **Consumer / Consumer Group**：**拉取（pull）** 消息；**组内** 分区 **互斥分配**，实现 **水平扩展**；位移提交到 **`__consumer_offsets`**。  
 - **Coordinator（组协调器）**：某个 Broker 上服务 **消费组** 的 **成员、分区分配、offset 提交**；**事务协调器** 处理 **事务型 Producer**。  
-- **Controller**：**集群级** 角色（ZK 模式由选举产生；KRaft 下为 **元数据仲裁层** 一部分），负责 **分区 Leader 选举、元数据变更** 等，**不替代** 各分区 Leader 的 **日常读写**。
+- **Controller**：**集群级** 角色。**ZooKeeper 模式** 下由 ZK 辅助选举；**KRaft** 下 **Controller 仲裁元数据**（**4.0+** 仅为 KRaft）。负责 **分区 Leader 选举、元数据变更** 等，**不替代** 各分区 Leader 的 **日常读写**。
 
-**面经收束：** **Producer/Broker/Consumer** 管数据路径；**Controller/Coordinator** 管协调与元数据。
+**面经收束：** **Producer/Broker/Consumer** 管数据路径；**Controller/Coordinator** 管协调与元数据。**Kafka 4.0** 面试可一句：**ZK 完全退出**，新部署只谈 **KRaft**。
 
 ---
 
@@ -221,13 +229,13 @@
 
 ### 23. KRaft 相对 ZooKeeper 模式常被问什么？
 
-**答：** **KRaft** 用 **内置 Raft Quorum** 管理 **元数据**，**去掉 ZooKeeper**，**组件更少**、**元数据扩展路径** 更清晰；**滚动升级与版本** 以 **官方文档** 为准。**3.x** 生产采用率上升，面试可对比 **「外部 ZK 故障域」vs「元数据与日志一体」**。
+**答：** **KRaft** 用 **内置 Raft Quorum** 管理 **元数据**，**去掉外部 ZooKeeper**，**组件更少**、**故障域** 更集中可治理；**元数据与 Broker 一体演进**（官方 **KIP** 持续迭代）。**3.x** 可从 ZK **滚动迁移** 到 KRaft（步骤与限制以 **[官方 Migration 文档](https://kafka.apache.org/documentation/#kraft)** 为准）。**4.0** 起 **Kafka 仅支持 KRaft**，**不再打包 ZK 模式**（见 **[From ZooKeeper to KRaft](https://kafka.apache.org/40/getting-started/zk2kraft/)**）。
 
 ---
 
 ### 24. ZK 模式下 ZK 存什么？（遗留与对比）
 
-**答：** **Controller 选举**、**Broker 注册**、**Topic/分区路由**、**ACL** 等；**消费 offset 已迁出 ZK**。**遗留系统** 可能仍见 ZK，新架构答 **KRaft**。**对比：** **KRaft 元数据内生化**，运维 **少一套集群**。
+**答：** **面向 3.x 及更早的遗留架构**：ZK 侧常见 **Controller 选举**、**Broker 注册**、**Topic/分区路由**、**部分 ACL** 等；**消费 offset 已迁出 ZK** 多年（**`__consumer_offsets`**）。**面试收束：** **新项目/4.x 只讲 KRaft**；**老集群** 才复习本条目，并准备 **迁移 / 双写窗口** 类追问。
 
 ---
 
@@ -630,19 +638,25 @@ Producer 应使用 **`acks=all`**，Topic 或集群级配置 **`min.insync.repli
 
 ## 十二、自测清单
 
-| 考点 | 一句话 |
-|------|--------|
-| 分区 | **有序边界**；key 哈希进分区 |
-| acks | **0/1/all**；**all + min.insync** |
-| ISR/HW | **同步副本**；**可见已提交**；**all+minISR+ISR 选主** 与 **unclean** 对比（**题 45**） |
-| 幂等 | **PID + 序列号**；**不跨分区** |
-| 消费组 | **分区唯一消费者**；**rebalance** |
-| 提交 | **手动提交** 对齐业务 |
-| EOS | **事务 + read_committed**；**端外需幂等** |
-| KRaft | **去 ZK**；**元数据 Raft** |
-| 场景 | **丢消息排查（题 28）**、**防丢设计（题 29）**、**重复与 rebalance**、**Outbox**、**订单 key 保序 + 入队分片（题 37）** |
-| 进阶 | **unclean leader**、**compact**、**in-flight+幂等**、**机架感知**、**题 45 acks+ISR 选主** |
-| 面经补充 | **高性能/零拷贝**、**Pull 背压**、**vs RocketMQ**、**compact offset**、**压缩**、**题 46～58** |
+| 域 | 一句话 |
+|----|--------|
+| 定位 | **持久日志 + 分区并行**；**非典型 MQ** |
+| Topic/分区 | **有序边界**；**key 哈希** |
+| 副本 | **Leader/Follower**；**ISR** |
+| HW/LEO | **高水位 vs 日志末** |
+| acks | **0/1/all**；**all + min.insync.replicas** |
+| 幂等生产 | **PID + 序列号**；**单分区内** |
+| 压缩 | **batch、linger、codec** |
+| 消费组 | **组内互斥分区**；**>分区数空闲** |
+| rebalance | **poll 间隔、会话**；**Sticky** |
+| offset | **`__consumer_offsets` compact** |
+| 提交 | **手动提交** 对齐处理成功 |
+| EOS | **事务 + read_committed**；**跨系统需业务幂等** |
+| 存储 | **segment、index、delete/compact** |
+| KRaft | **4.0+ 无 ZK** |
+| 监控 | **Lag、URP、ISR** |
+| 场景 | **丢消息、重复、保序、跨集群** |
+| 面经 | **题 46～58** |
 
 ---
 

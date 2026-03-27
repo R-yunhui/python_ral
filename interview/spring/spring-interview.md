@@ -1,6 +1,6 @@
 # Spring / Spring Boot / Spring Cloud 高频面试题（IoC · AOP · 自动配置 · 微服务组件）
 
-> 面向 **Spring Framework 6.x + Spring Boot 3.x + Spring Cloud 2023.x / 2024.x**（**Jakarta EE 命名空间**）；具体注解与默认行为以项目依赖版本为准。综合近年技术社区面经（注册配置、网关、熔断限流、可观测性）与官方演进方向整理，**偏实战追问可落到源码概念与运维取舍**。
+> 面向 **Spring Framework 6.x + Spring Boot 3.x + Spring Cloud 2023.x / 2024.x**（**Jakarta**；**Boot 3 最低 JDK 17**，**虚拟线程** 等随 **JDK 21+**）。含**分层答法**、**（基础补充）**、**场景题**、**面经补充**与 **自测表**。版本以 **[Supported Versions](https://github.com/spring-projects/spring-boot/wiki/Supported-Versions)** 与项目 BOM 为准。
 
 ---
 
@@ -19,9 +19,17 @@
 11. [面经高频补充](#十一面经高频补充)
 12. [自测清单](#十二自测清单)
 
+> **复习主线：** **IoC/DI → Bean 生命周期与循环依赖 → AOP 代理与自调用 → `@Transactional` 传播 → `AutoConfiguration.imports` → Cloud 注册发现 + Gateway + OpenFeign + 熔断限流 + Observation**。参考：<https://docs.spring.io/spring-boot/reference/>
+
 ---
 
 ## 一、Spring 核心：IoC 与 Bean
+
+### Spring 生态在技术栈里的位置？（开胃）
+
+**答：** **Spring Framework**：**IoC 容器 + AOP + 声明式事务 + Web（MVC/WebFlux）+ 集成测试**。**Spring Boot**：**约定优于配置 + 自动装配 + 内嵌服务器 + Actuator**。**Spring Cloud**：**注册配置、路由、负载均衡、熔断、链路**（**release train / BOM 必须对齐**）。**Boot 3**：**`javax.*` → `jakarta.*`**。
+
+---
 
 ### 1. IoC 与 DI 是什么？和「工厂模式」差在哪？
 
@@ -322,18 +330,21 @@
 
 ## 十二、自测清单
 
-| 考点 | 一句话 |
-|------|--------|
-| IoC/DI | **容器管生命周期与装配** |
-| 循环依赖 | **三级缓存、构造器不行** |
-| 事务 | **自调用失效、传播、隔离、rollbackFor** |
-| AOP | **代理、同类自调用坑** |
-| Boot 启动 | **AutoConfiguration + 条件装配** |
-| Boot 3 | **Jakarta、JDK17、观测换 Micrometer 心智** |
-| Cloud | **注册、配置、RPC、网关、熔断限流、链路** |
-| Feign | **声明式、负载均衡、超时重试幂等** |
-| Gateway | **Route/Predicate/Filter、非阻塞** |
-| 灰度 | **元数据/Header 路由 + 透传** |
+| 域 | 一句话 |
+|----|--------|
+| 生态 | **Framework vs Boot vs Cloud** |
+| IoC/DI | **容器生命周期、注入方式** |
+| Bean | **作用域、循环依赖三级缓存、构造器环** |
+| 生命周期 | **BeanPostProcessor、初始化销毁、代理包装时机** |
+| 事务 | **自调用、传播、隔离、rollbackFor、多数据源** |
+| AOP | **JDK/CGLIB、Pointcut/Advice、自调用** |
+| Boot | **`AutoConfiguration.imports`、条件注解、配置优先级** |
+| Boot 3 | **Jakarta、JDK17+、Micrometer Tracing** |
+| Cloud | **注册、配置、LoadBalancer、熔断限流** |
+| Feign | **声明式 HTTP、超时重试、幂等键** |
+| Gateway | **Predicate/Filter、WebFlux** |
+| 灰度 | **Header/元数据路由、链路透传** |
+| 可观测 | **Observation、Actuator、生产鉴权** |
 
 ---
 

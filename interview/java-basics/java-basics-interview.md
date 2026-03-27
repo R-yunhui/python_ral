@@ -1,6 +1,6 @@
 # Java 基础高频面试题（语法 · 集合 · 并发 · 新特性）
 
-> 面向 **JDK 8～21** 常见考点；**API 细节以当前 JDK 文档为准**。含**场景题**、**面经普通题补充**与自测表。
+> 面向 **JDK 8～25** 常见考点（**21 / 25** 均为 **LTS**；**预览特性与 API 以所用 JDK 与项目为准**）。含**分层答法**、**（基础补充）**、**场景题**、**面经补充**与 **自测表**。与 **JVM**、**Spring** 文档可交叉复习。
 
 ---
 
@@ -11,51 +11,94 @@
 3. [异常与泛型](#三异常与泛型)
 4. [IO / NIO](#四io--nio)
 5. [并发基础](#五并发基础)
-6. [Java 8～21 新特性速记](#六java-821-新特性速记)
+6. [Java 8～25 新特性速记](#六java-825-新特性速记)
 7. [场景题](#七场景题)
 8. [进阶补充](#八进阶补充)
 9. [面经普通题补充](#九面经普通题补充)
 10. [自测清单](#十自测清单)
 
+> **复习主线：** **`==/equals` → 集合（HashMap 树化/CHM）→ 线程池七参数 → `volatile` 与原子类 → Stream/Optional → 虚拟线程与 record**。**官文：** <https://docs.oracle.com/en/java/> 、 <https://openjdk.org/>
+
 ---
 
 ## 一、语言基础与面向对象
 
+### Java 平台与字节码是什么？（开胃）
+
+**答：** **`.java` 经 `javac` 编译为 `.class`（字节码）**，由 **JVM** **加载 → 验证 → 准备 → 解析 → 初始化**（初始化阶段见 JVM 文档），再 **解释执行** 或由 **JIT** 编译为本地代码。**JDK = 语言 + 工具 + 标准库**；**JRE 侧重运行环境**（现代语境多直接说 JDK）。**规范**：**JLS** 定义语言；**JVMS** 定义字节码与 class 文件——面试深挖时区分 **「语言保证」与「HotSpot 实现/调优」**。
+
+---
+
 ### 1. `==` 与 `equals` 区别？String 比较注意什么？
 
-**答：** **`==`**：基本类型比较 **数值**；引用类型比较 **引用地址是否同一对象**。**`equals`**：Object 默认 **等价于 `==`**；**String、Integer** 等重写为 **值相等** 语义。  
-**String：** **字面量** 可能进 **常量池** 使 `==` 为 true；**`new String("a")`** 与字面量 **通常 `==` false**、**`equals` true**。业务比较 **统一用 `equals`**，注意 **NPE** 时用 **`Objects.equals`**。
+**答（分层）：**
+
+1. **`==`**：**基本类型** 比较 **值**；**引用类型** 比较 **是否同一对象**（引用相等）。
+2. **`equals`**：Object 默认 **等同于 `==`**；**String、包装类型** 等重写为 **逻辑相等**。
+3. **String：** **字面量** 入 **字符串常量池**（编译期能确定的常量折叠等），故 **同字面量 `==` 常 true**；**`new String("x")`** 堆上新建，**`==` 字面量多为 false`**。**`intern()`** 可将堆实例与池中引用对齐。
+4. **工程：** **`Objects.equals(a, b)`** 防空指针；**业务比较勿依赖 `==`**（除枚举单例等明确场景）。
 
 ---
 
 ### 2. `hashCode` 与 `equals` 约定？
 
-**答：** **约定：** **`equals` 相等 → `hashCode` 必须相同**；**`hashCode` 相同不要求 `equals` 相等**（哈希冲突）。**重写 `equals` 必须重写 `hashCode`**，否则 **HashMap/HashSet** 行为错误。  
-**实现：** 常用 **31 多项式** 组合字段；**可变对象** 作 key 会导致 **插入后修改字段 → 找不到**，故 **key 宜不可变**（与 **题 10** 呼应）。
+**答：** **契约（覆写必背）：**
+
+- **`equals` 为 true ⇒ `hashCode` 必须相同**（否则 HashMap/HashSet 破坏桶）。
+- **`hashCode` 相同 ⇒ `equals` 不必为 true**（冲突正常）。
+
+**实现提示：** `Objects.hash(...)` 或 **31 多项式** 组合字段；**参与 `equals` 的字段应参与 `hashCode`**。**可变对象** 改字段后 **hash 变化** → **Map 中「丢失」**，故 **key 宜不可变**（与 **题 10** 呼应）。
 
 ---
 
 ### 3. 抽象类与接口区别？Java 8+ 之后呢？
 
-**答：** **单继承多实现**；接口 **Java8 `default/static`**、**Java9 `private` 方法**；**函数式接口**（单抽象方法）支撑 **Lambda**。抽象类可有 **状态**，接口多 **契约**。
+**答：**
+
+| 维度 | 抽象类 | 接口（Java 8+） |
+|------|--------|-----------------|
+| 继承 | **单继承** | **多实现** |
+| 状态 | 可有 **字段、构造器** | 多为常量 **public static final**；**实例字段** 在 **Java 8+ 前无** |
+| 方法 | 抽象 + 具体 | **`default` / `static`（8）**、**`private` 实例方法（9）** 丰富 |
+| 设计 | **is-a 强抽象**、模板方法 | **能力组合**、`@FunctionalInterface` 支撑 **Lambda** |
+
+**追问：** **函数式接口** = 仅 **一个抽象方法**（可多个 default）。
 
 ---
 
 ### 4. `final` 修饰类、方法、变量？
 
-**答：** **类**不可继承；**方法**不可重写；**变量**引用不可变（对象内容可变若类型允许）。
+**答：** **类**：**不可被继承**（如 `String`、常见工具类）。**方法**：**子类不可重写**（可与 **早期绑定** 优化一并记）。**变量**：**引用不可变**——**不能再指向别的对象**；**若指向可变对象**（如 `StringBuilder`），**对象内容仍可改**。**`final` 与 可见性**：常被与 **安全发布**、`volatile` 对比考。
 
 ---
 
 ### 5. 字符串拼接 `+` 与 `StringBuilder`？
 
-**答：** **编译期常量** 可能折叠；**循环中 `+`** 常编译为 **StringBuilder**（或应手写 **StringBuilder** 避免多次创建）。**JDK9+** `String` 内部实现有调整，**面试答思路**。
+**答：** **编译器**：**常量表达式** 可能 **编译期折叠** 为一个字面量。**运行时循环里 `+=`**：通常等价于多次 `StringBuilder.append`（字节码可反编译验证）；**手写单个 `StringBuilder`** 可少建临时对象。**JDK 9+**：`String.concat` / 编译策略有演进，**面试答「编译器优化 + 大循环用 Builder」** 即可。**线程安全**：`**StringBuffer**` 带同步，**单线程拼禁用** 一般选 **StringBuilder**。
 
 ---
 
 ### 6. 序列化 `serialVersionUID` 有什么用？
 
-**答：** **版本兼容**；不显式声明可能因字段变化导致 **InvalidClassException**。
+**答：** **反序列化** 时用 **`serialVersionUID`** 校验 **类版本兼容**：**不一致** 抛 **InvalidClassException**。**不显式声明**：依赖编译器根据类细节生成，**改字段名/签名** 易导致 **UID 漂移**、线上反序列化失败。**实践：** `private static final long serialVersionUID = ...L` **显式固定**；**`transient`** 字段不落盘；**兼容性策略** 与 **API 版本** 一起设计。
+
+---
+
+### （基础补充）`Object` 还有哪些常考方法？
+
+**答：** **`toString`、`equals`、`hashCode`、`clone`（`Cloneable`）、`finalize`（已过时）、`getClass`、`notify/notifyAll`、`wait`**。面试常追问 **`clone` 浅拷贝** 与 **`Cloneable` 标记接口** 的设计争议；**优先 copy 构造器或拷贝工厂**。
+
+---
+
+### （基础补充）重载（Overload）与重写（Override）？
+
+**答：** **重载**：**同签名方法名**、**参数列表不同**（类型/个数/顺序）；**返回类型单独变不构成重载**；**编译期绑定**。**重写**：**子类** 与父类 **方法签名一致**、**返回类型协变**；**访问权限不可更窄**；抛异常 **不能更宽**；**`@Override` 建议必写**。
+
+---
+
+### （基础补充）包装类型、`==` 与缓存？
+
+**答：** **整型包装** 使用 **`Integer.valueOf`** 时，默认缓存 **-128～127**（上限可通过 JVM 参数 `java.lang.Integer.IntegerCache.high` 调整），故 **自动装箱** 落在缓存内时 **`==` 可能为 true**；**`new Integer(1)`** 恒为新对象、**勿用 `==`**。**`Float`、`Double`** **无** 整型那种固定缓存，**比较必须用 `equals` 或 `Float.compare`**。与 **题 1、46** 合并记忆。
 
 ---
 
@@ -63,32 +106,37 @@
 
 ### 7. `ArrayList` 与 `LinkedList`？
 
-**答：** **ArrayList** 动态数组，**随机访问 O(1)**，尾部扩容；**LinkedList** 双向链表，**头尾插入** 友好，**随机访问慢**。**内存局部性** 常使 ArrayList 更常用。
+**答：** **ArrayList**：**动态数组**，扩容 **约 1.5 倍**（以 JDK 源码为准），**随机访问 O(1)**，尾部插入 **均摊 O(1)**，**中间插入** 搬移 **O(n)**。**LinkedList**：**双向链表**，头尾 **O(1)**，按索引 **O(n)**。**CPU 缓存**：数组 **局部性好**，多数业务 **默认 ArrayList**；**LinkedList** 适合 **双端队列**、频繁头尾删插（亦可选 **`ArrayDeque`** 对比）。
 
 ---
 
 ### 8. `HashMap` 底层？JDK8 链表过长怎么办？
 
-**答：** **数组（桶）+ 链表** 解决冲突；**JDK8+** 当 **链表长度超过阈值**（默认 8）且 **桶数达到最小树化容量** 时 **链表 → 红黑树**，将 **最坏查找** 从 O(n) 降到 **O(log n)**。**扩容** 时 **容量翻倍**，**重新分布**（rehash）。  
-**负载因子** 默认 0.75，**空间与时间** 折中。面经：**并发不要用 HashMap**。
+**答：** **数组 + 链表/红黑树**。**hash 扰动后取桶**；冲突挂链。**树化**：链表长 **≥ 8** 且 **容量 ≥ 64** 转 **红黑树**；**元素过少（≤ 6）** 可 **退链**。**负载因子 0.75**、容量 **2 的幂**。**JDK7 并发扩容头插成环** → **`get` 死循环**；**JDK8 尾插** 缓解但 **仍非线程安全**。**`put` 主线**：**hash & (n-1)** 定位桶 → **空则新建节点** → **否则链表/树里找 key**（有则覆盖 value）→ **尾插 + 计数** → **超阈值则树化或扩容**（**CHM 才大量用 CAS**，勿混）。
 
 ---
 
 ### 9. `HashMap` 线程安全吗？`ConcurrentHashMap` 呢？
 
-**答：** **`HashMap`** **非线程安全**，多线程 **扩容死循环（JDK7）**、**数据错乱（JDK8+）**。**`ConcurrentHashMap`**：**JDK7** **分段锁**；**JDK8+** **CAS + synchronized（锁桶头）**，**读多写少** 性能较好。**`Collections.synchronizedMap`** 全局锁、**Hashtable** 老旧，**少用**。详见 **题 44**。
+**答：** **`HashMap`**：**否**。**`ConcurrentHashMap`**：**JDK7 `Segment` 分段**；**JDK8+** **`Node` 数组 + CAS + synchronized（必要时锁首节点）`**，**读路径多无锁 volatile**。**`Collections.synchronizedMap`**：**互斥锁包一层**。**`Hashtable`**：过时。**详见题 44**（`get` 是否加锁）。
 
 ---
 
 ### 10. `HashMap` 的 `key` 为什么常建议不可变对象？
 
-**答：** **`hashCode/equals` 若参与后变更**，定位错乱，**找不到或重复**。**String、Integer** 常用作 key。
+**答：** **`hashCode`/`equals` 依赖字段** 在 **插入后变更** → **错桶/找不到**。**宜：** `String`、枚举、**不可变值对象**。
 
 ---
 
 ### 11. `fail-fast` 与 `fail-safe`？
 
-**答：** **迭代时结构修改** 抛 **ConcurrentModificationException**（**fail-fast**）；**CopyOnWriteArrayList** 等 **迭代副本**（**fail-safe**，弱一致）。
+**答：** **fail-fast**：**`modCount`** 与迭代器 **`expectedModCount`** 不一致 → **`ConcurrentModificationException`**（**`Iterator.remove` 合法**）。**fail-safe**（如 **COW**）：**迭代副本**，**可能看不到最新写**。
+
+---
+
+### （基础补充）`Map` / `Collections` 怎么选？
+
+**答：** **`LinkedHashMap`**：按 **插入或访问序**（`accessOrder`），可做 **LRU**（覆写 **`removeEldestEntry`**）。**`TreeMap`**：**红黑树**、`NavigableMap`。**`EnumMap`**：**枚举为键** 省内存。**`Collections.unmodifiableXxx`**：**视图**，底层变仍可见；**`emptyList` 等** 不可变单例。**勿** 误以为 **unmodifiable = 深拷贝**。
 
 ---
 
@@ -96,13 +144,19 @@
 
 ### 12. `Error` 与 `Exception`？受检与非受检？
 
-**答：** **`Error`** 严重系统问题；**`Exception`** 分 **RuntimeException（非受检）** 与 **受检异常**（需声明/捕获）。**业务异常设计** 常考。
+**答：** **`Throwable`** 分 **`Error`**（如 **`OutOfMemoryError`、`StackOverflowError`**）—— **一般不捕获**、属 **JVM/不可恢复**；与 **`Exception`**。**受检异常**（`IOException`）：编译器要求 **`throws` 或 try/catch**。**非受检 `RuntimeException`**：可 **不显式声明**。**业务**：自定义 **运行时异常 + 错误码**；避免 **API 全 throws Exception**。
 
 ---
 
 ### 13. 泛型擦除是什么？带来什么问题？
 
-**答：** **编译期** 泛型信息擦为 **原始类型** + **桥方法**；**运行时** `List<String>` 与 `List<Integer>` **同一 Class**。**反射**、**instanceof**、**数组** 有坑。
+**答：** **编译期** 做 **类型检查**；**字节码** 中多擦为 **原始类型**（`List<String>` → `List`），必要时 **合成桥方法** 保持多态。**运行时**：`list.getClass()` **无 `<String>`**。**坑：** **`new T[]` 非法**；**`instanceof` / 原始类型 catch**；**反射** 要 `ParameterizedType` 才拿泛型信息。**PECS**：`Producer Extends, Consumer Super`。
+
+---
+
+### （基础补充）`try-catch-finally` 与 `return`？
+
+**答：** **`finally`** 常执行（**`System.exit`、线程死亡等除外**）；**`finally` 里 return** 会 **覆盖 try 返回值**（笔试题）。**`try-with-resources`**：关闭顺序 **逆序**，**抑制异常** **`addSuppressed`**。**try-with-resources** 优于手写 `finally` 关流。
 
 ---
 
@@ -110,13 +164,19 @@
 
 ### 14. BIO、NIO、AIO 区别？（口头）
 
-**答：** **BIO** 一连接一线程阻塞；**NIO** **多路复用**（`Selector`）非阻塞；**AIO** **异步回调**（Linux 上实际使用与实现有关）。**Netty** 常基于 **NIO/epoll**。
+**答：** **BIO**：**一连接一线程**，**accept/read** 阻塞，**C10K** 压力大。**NIO（New I/O / NIO2 部分）**：**Channel + Buffer + Selector**，**单线程多路复用** 监听多 Channel **就绪事件**（Linux **epoll**），**Netty** 默认基于此模型。**AIO（NIO2 AsynchronousChannel）**：**异步回调/ Future**；**Linux** 上实现可能仍用 **线程池模拟**，**与平台相关**。**面试：** **高并发网关：NIO/epoll**。
 
 ---
 
 ### 15. `try-with-resources` 要求？
 
-**答：** 实现 **`AutoCloseable`**；**编译器生成 close**，**抑制异常** 有 **addSuppressed**。
+**答：** 资源类实现 **`AutoCloseable`**（`Closeable` 是其子接口）；**编译器脱糖** 为 **try-finally 安全关闭**。**多资源**：**分号分隔**，**逆序关闭**。**异常**：**首要异常抛出**，关闭异常 **`Throwable.addSuppressed`**。
+
+---
+
+### （基础补充）NIO `Buffer` 简要？
+
+**答：** **`capacity/limit/position/mark`**；**`flip()`** 读模式准备；**`clear()`** 写模式重置。**`DirectByteBuffer`**：堆外内存，**零拷贝** 路径相关，**分配昂贵**，见 JVM **直接内存 OOM**。
 
 ---
 
@@ -124,57 +184,78 @@
 
 ### 16. 创建线程几种方式？`start` 与 `run`？
 
-**答：** **Thread**、**Runnable**、**Callable+Future**、**线程池**。**`start`** 新线程执行；**`run`** 普通方法调用。
+**答：** **实质**：**底层都是 `Thread` 与 `Runnable.run`**。**常见形态**：继承 `Thread`（少用）、**`new Thread(runnable)`**、**`FutureTask` + Callable**、**线程池 `Executor.execute/submit`**。**`start()`**：**新栈**、**JVM 调度**；**`run()`**：**当前线程普通调用**。**`Callable`**：**有返回值、可抛受检异常**，经 **`Future.get`** 获取。
 
 ---
 
 ### 17. 线程池参数？`ThreadPoolExecutor` 拒绝策略？
 
-**答：** **corePoolSize、maximumPoolSize、keepAlive、queue、threadFactory、handler**。**Abort/CallerRuns/Discard/OldestDiscard**。**队列选型**（有界 vs 无界）与 **OOM** 场景常考。
+**答：** **核心线程数**、**最大线程数**、**存活时间**、**工作队列**、**线程工厂**（命名、守护、优先级）、**拒绝策略**。队列满且线程达 **`maximumPoolSize`** 触发 **拒绝**：
+
+| 策略 | 行为 |
+|------|------|
+| **AbortPolicy**（默认） | 抛 **`RejectedExecutionException`** |
+| **CallerRuns** | **调用者线程**执行，**背压** |
+| **Discard** | **静默丢** |
+| **DiscardOldest** | **丢队列头** 再试提交 |
+
+**有界队列 + CallerRuns/降级** 防 **`Executors` 无界队列 OOM**。
 
 ---
 
 ### 18. `synchronized` 与 `ReentrantLock`？
 
-**答：** **JVM 关键字** vs **API**；**Lock** 可 **尝试锁、超时、可中断**；**公平锁**；**需手动 unlock**（`finally`）。
+**答：** **`synchronized`**：JVM **监视器**，**自动释放**；**锁升级** 路径由 JVM 实现。**`ReentrantLock`**：**可中断、超时、`tryLock`、公平/非公平**、**Condition**；**须在 `finally unlock`**。**性能**：竞争不激烈时接近；**高阶并发结构**（读写锁、信号量）基于 **AQS**。
 
 ---
 
 ### 19. `ThreadLocal` 内存泄漏？
 
-**答：** **Entry 弱引用 key、强引用 value**；**线程池** 线程复用时 **未 remove** 可能 **泄漏**；**用完 remove**。
+**答：** **`ThreadLocalMap`** 的 **Entry 以 ThreadLocal 为 key（弱引用）**、**value 强引用**；**线程池** 线程长期存活 → **value 不释放**。**规范：** **`try { ... } finally { tl.remove(); }`**。**`InheritableThreadLocal`**：子线程**继承**父值；**虚拟线程/线程池** 注意 **传播语义**。
 
 ---
 
-## 六、Java 8～21 新特性速记
+### （基础补充）线程状态与 `InterruptedException`？
+
+**答：** **`NEW/RUNNABLE/BLOCKED/WAITING/TIMED_WAITING/TERMINATED`**（以枚举为准）。**`interrupt()`**：**打中断标志**；**阻塞在 `wait/join/sleep/IO` 等** 会 **抛 `InterruptedException` 并清标志**，**应恢复中断 `Thread.currentThread().interrupt()`** 或 **在高层处理**。**不要** 吞掉中断异常。
+
+---
+
+## 六、Java 8～25 新特性速记
 
 ### 20. Java 8：Lambda、Stream、`Optional`？
 
-**答：** **函数式接口** + **Lambda**；**Stream** 惰性、**中间/终端**操作；**`Optional`** 避免裸 **null**（不滥用）。
+**答：** **函数式接口**（`@FunctionalInterface`，**仅一个抽象方法**，可有 default）+ **Lambda/方法引用**。**Stream**：**中间操作**（`map/filter/sorted`）**惰性**，**终端操作**（`collect/forEach/reduce`）**触发流水线**。**`Optional`**：**显式可空**，避免 **NPE**；**不要** 作字段、**不要** 滥用 `get()`。
 
 ---
 
 ### 21. Java 9～11 常考点？
 
-**答：** **模块系统 JPMS**（`module-info.java`）；**`var` 局部类型推断**（10）；**HTTP Client**（11）；**单文件源码运行**（11）；**String API** 增强等。
+**答：** **JPMS**（**`module-info.java`、`exports/opens`**，迁移痛点多）。**10：`var`**。**11：`HttpClient`**、**`Files.readString`**、**单文件 `java Hello.java` 运行**、**ZGC 实验入口**（版本有关）。**面试：** **模块化 vs classpath**。
 
 ---
 
 ### 22. Java 17 LTS：密封类、`record`、模式匹配？
 
-**答：** **`sealed`** 限制继承；**`record`** 不可变数据载体（自动生成 **equals/hashCode/toString**）；**`switch` 模式匹配** 逐步增强。
+**答：** **`sealed` + permits**：限制 **可继承子集**，与 **`switch` 穷尽性** 配合。**`record`**：**不可变载体**、**自动生成访问器/equals/hashCode/toString**、**可嵌套与接口实现**。**模式匹配**：`instanceof` 绑定、`switch` **`case String s`** 等，减少样板代码。
 
 ---
 
 ### 23. Java 21 LTS：虚拟线程（Virtual Threads）？
 
-**答：** **轻量级线程**，**海量阻塞 IO** 场景减少 **平台线程** 消耗；**不要与 CPU 密集** 混用错误预期；**同步原语** 与 **载体线程** 调度关系是面试延伸点。
+**答：** **`Thread.ofVirtual().start(...)` / `Executors.newVirtualThreadPerTaskExecutor()`**：**海量任务** 映射到 **少量载体平台线程**；**阻塞**（IO、`park`）时 **卸載**，**别在 synchronized 里长时间阻塞**（**pinning**）削弱收益 → **用 `ReentrantLock`** 等。**CPU 密集** 仍靠 **并行度控制 + 算法**。
 
 ---
 
 ### 24. `record` 与 Lombok `@Data` 区别（口头）？
 
-**答：** **`record`** 语言级、语义固定（不可继承常规类）；**Lombok** 编译期生成代码，需依赖插件。
+**答：** **`record`**：**语言语义**、**继承受限**、**序列化/反射** 行为 **标准**。**Lombok**：**编译期注解处理器** 生成样板码，**IDE/增量编译** 要配置。**选型：** 公共 API DTO 倾向 **record**（JDK 17+）。
+
+---
+
+### （版本补充）JDK 25 与 JDK 21，面经怎么答？
+
+**答：** **JDK 21** 仍是 **虚拟线程、模式匹配等能力** 的「主力 LTS 参考」；**JDK 25** 为 **2025 年起的新 LTS**（具体与支持周期以 [Oracle / OpenJDK 发布公告](https://openjdk.org/projects/jdk/25/) 为准）。面试若问「为何升 25」→ **长期安全更新、运行时与 GC 演进、基准测试收益**，并强调 **依赖与框架兼容性验证**、**勿死记 JEP 清单**。业务代码仍优先保证 **在团队统一 JDK 上跑通测试**。
 
 ---
 
@@ -346,22 +427,38 @@
 
 ### 49. SPI 与双亲委派「破坏」？
 
-**答：** **ServiceLoader** 用 **线程上下文类加载器** 加载 **实现类**，解决 **父加载器** 无法加载 **子 classpath** 的问题；属 **委派模型灵活应用**，面经常和 **题 34 `loadClass`** 一起出现。
+**答：** **`ServiceLoader`** 常配合 **`Thread.currentThread().getContextClassLoader()`** 加载 **实现类**（父加载器加载的 **接口** + 应用 classpath 的 **实现**）。属 **委派模型的补充**；深问见 **JVM「双亲委派 / `loadClass`」** 专题。
 
 ---
 
 ## 十、自测清单
 
-| 考点 | 一句话 |
-|------|--------|
-| equals/hashCode | **一致**、**HashMap key** |
-| 集合 | **HashMap 树化**、**CHM 并发** |
-| 并发 | **线程池 7 参**、**拒绝策略** |
-| ThreadLocal | **线程池 + remove** |
-| 新特性 | **record**、**sealed**、**虚拟线程** |
-| 场景 | **LongAdder**、**线程池无界队列**、**SimpleDateFormat** |
-| 进阶 | **DCL+volatile**、**CompletableFuture 线程池**、**并行流线程安全** |
-| 面经补充 | **CHM get**、**String 不可变**、**Integer 缓存**、**Stream 惰性**、**synchronized 锁对象**、**SPI**（**题 44～49**） |
+| 域 | 一句话 |
+|----|--------|
+| 平台 | **javac → class → JVM/JIT**；**JLS vs HotSpot** |
+| equals/`==` | **引用/值**；**常量池与 `intern`** |
+| hashCode | **与 equals 一致**；**不可变 key** |
+| OO | **接口 default/private**；**重载 vs 重写** |
+| String | **`StringBuilder`**；**Buffer 线程安全** |
+| 序列化 | **`serialVersionUID`、`transient`** |
+| 包装 | **Integer 缓存**；**勿 `==` 比 Double** |
+| ArrayList | **扩容**、**LinkedList vs Deque** |
+| HashMap | **树化 8/64**、**尾插**、**非线程安全** |
+| CHM | **JDK8 CAS + 锁桶**、**弱一致迭代** |
+| 迭代 | **fail-fast modCount**、**COW** |
+| Map 选型 | **LinkedHashMap LRU**、**TreeMap** |
+| 异常 | **受检 vs 非受检**、**Error 不抓** |
+| 泛型 | **擦除、桥方法、PECS** |
+| IO | **BIO/NIO(epoll)/AIO**、**DirectBuffer** |
+| 线程池 | **七参数、拒绝策略、有界队列** |
+| 锁 | **`synchronized` vs ReentrantLock** |
+| ThreadLocal | **弱 key 强 value**、**remove** |
+| 中断 | **`InterruptedException` 恢复标志** |
+| 新特性 | **Stream 惰性**、**record/sealed**、**虚拟线程 pinning** |
+| LTS | **21 / 25 口径 + OpenJDK** |
+| 场景 | **LongAdder**、**无界队列 OOM**、**DateTimeFormatter** |
+| 进阶 | **DCL volatile**、**CompletableFuture 自定义池**、**并行流** |
+| 面经 | **题 44～49** |
 
 ---
 
