@@ -1,7 +1,22 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(cd /d D:ryhpersonalpythonral)",
+      "Bash(.venvScriptspython -c \"import deepagents; print\\(deepagents.__file__\\)\")",
+      "Bash(D:/ryh/personal/python/ral/.venv/Scripts/python -c \"import deepagents; print\\(deepagents.__file__\\)\")",
+      "WebFetch(domain:google.github.io)",
+      "WebFetch(domain:a2a.gg)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(timeout 5 uv run llm/04_a2a_multi_agent.py --agent researcher)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :9001)",
+      "Bash(taskkill /PID 21012 /F)",
+      "Bash(findstr :9002)",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 9001 -ErrorAction SilentlyContinue | Select-Object OwningProcess\")",
+      "Bash(powershell -Command \"Stop-Process -Id 21012 -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2; Get-NetTCPConnection -LocalPort 9001 -ErrorAction SilentlyContinue\")",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 10001,10002 -ErrorAction SilentlyContinue | Select-Object LocalPort, State\")"
     ]
   }
 }

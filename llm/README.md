@@ -1,36 +1,105 @@
-# LLM 学习示例（LangChain / LangGraph / deepagents）
+# A2A (Agent-to-Agent) 协议学习示例
 
-这组示例按学习顺序组织：
+A2A 是 Google 提出的开放协议，用于不同 AI Agent 之间的标准化通信。
 
-1. `01_langchain_basics.py`：最小 LangChain 链式调用
-2. `02_langgraph_state_flow.py`：最小 LangGraph 状态图与分支
-3. `03_deepagents_quickstart.py`：最小 deepagents 智能体（需要可调用工具的在线模型）
-4. `04_langgraph_with_tools.py`：LangGraph 状态图内调用工具并按条件路由
+## 示例说明
 
-## 运行方式
+| 文件 | 说明 | 端口 |
+|------|------|------|
+| `01_a2a_helloworld.py` | 最简单的 A2A Agent 服务端 | 9999 |
+| `02_a2a_client.py` | A2A 客户端，用于测试 Agent | - |
+| `03_a2a_langchain_agent.py` | 结合 LangChain 的 A2A Agent | 9998 |
+| `04_a2a_multi_agent.py` | 多 Agent 协作示例 | 10001/10002 |
 
-在项目根目录执行：
+## 安装依赖
 
-```powershell
-.\.venv\Scripts\python .\llm\01_langchain_basics.py
-.\.venv\Scripts\python .\llm\02_langgraph_state_flow.py
-.\.venv\Scripts\python .\llm\03_deepagents_quickstart.py
-.\.venv\Scripts\python .\llm\04_langgraph_with_tools.py
+```bash
+uv add a2a-sdk
 ```
 
-## 可选：切换到真实模型
+## 快速开始
 
-默认是离线演示（前两个脚本）。如果你要让前两个脚本也连真实模型：
+### 示例 1: HelloWorld Agent
 
-```powershell
-$env:USE_REAL_LLM="1"
-$env:OPENAI_API_KEY="你的key"
-.\.venv\Scripts\python .\llm\01_langchain_basics.py
+```bash
+# 终端1: 启动服务端
+uv run llm/01_a2a_helloworld.py
+
+# 终端2: 运行客户端
+uv run llm/02_a2a_client.py
 ```
 
-`03_deepagents_quickstart.py` 默认要求：
+### 示例 2: LangChain Agent
 
-- `USE_REAL_LLM=1`
-- `OPENAI_API_KEY` 已配置
+```bash
+# 启动 LangChain Agent
+uv run llm/03_a2a_langchain_agent.py
 
-因为 deepagents 依赖可调用工具（tool calling）模型，离线假模型不支持该能力。
+# 使用客户端测试
+uv run llm/02_a2a_client.py  # 修改 BASE_URL 为 http://localhost:9998
+```
+
+### 示例 3: 多 Agent 协作
+
+```bash
+# 终端1: 启动研究员 Agent
+uv run llm/04_a2a_multi_agent.py --agent researcher
+
+# 终端2: 启动写作者 Agent
+uv run llm/04_a2a_multi_agent.py --agent writer
+
+# 终端3: 运行协调器
+uv run llm/04_a2a_multi_agent.py --orchestrator
+```
+
+## A2A 核心概念
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     A2A Agent 架构                           │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │            A2AStarletteApplication                   │   │
+│  │            (HTTP 服务器)                              │   │
+│  └────────────────────────┬────────────────────────────┘   │
+│                           │                                │
+│                           ▼                                │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │            DefaultRequestHandler                      │   │
+│  │            (处理 A2A 协议请求)                        │   │
+│  └────────────────────────┬────────────────────────────┘   │
+│                           │                                │
+│          ┌────────────────┼────────────────┐              │
+│          ▼                ▼                ▼              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
+│  │AgentExecutor│  │  TaskStore  │  │  AgentCard  │       │
+│  │ (执行逻辑)  │  │ (任务存储)  │  │ (能力描述)  │       │
+│  └──────┬──────┘  └─────────────┘  └─────────────┘       │
+│         │                                                   │
+│         ▼                                                   │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │            Your Agent Logic                          │  │
+│  │            (LLM / Tools / Memory)                    │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| 概念 | 说明 |
+|------|------|
+| **AgentCard** | Agent 的"名片"，描述能力、URL、技能等 |
+| **AgentSkill** | 具体技能定义（id、名称、描述、示例） |
+| **AgentExecutor** | 执行接口，实现 `execute` 和 `cancel` 方法 |
+| **TaskStore** | 任务状态存储（内存/数据库） |
+| **EventQueue** | 事件队列，用于流式返回结果 |
+
+## 与其他框架对比
+
+| 特性 | A2A | LangGraph | DeepAgent |
+|------|-----|-----------|-----------|
+| 通信方式 | JSON-RPC over HTTP | State 共享 | task 工具 |
+| 跨框架支持 | ✅ | ❌ | ❌ |
+| 服务发现 | Agent Card | 硬编码 | 硬编码 |
+| 标准化 | ✅ 开放标准 | ❌ 框架私有 | ❌ 框架私有 |
+| 内部暴露 | ✅ 完全隔离 | 共享 State | 隔离 |
