@@ -15,7 +15,8 @@
 7. [场景题](#七场景题)
 8. [进阶补充](#八进阶补充)
 9. [面经普通题补充](#九面经普通题补充)
-10. [自测清单](#十自测清单)
+10. [高频补充（GC 细节·收集器·版本演进）](#十高频补充gc-细节收集器版本演进)
+11. [自测清单](#十一自测清单)
 
 > **复习主线：** **数据区（栈/堆/元空间）→ 对象头与指针压缩 → 分代与 GC Roots → 收集器（G1/ZGC）→ 类加载双亲委派 → JMM happens-before → 调参（堆/元空间/日志）**。文档：<https://docs.oracle.com/en/java/> ；GC：[Garbage Collection Tuning Guide](https://docs.oracle.com/en/java/javase/21/gctuning/)。
 
@@ -93,7 +94,19 @@
 
 ### 6. 如何判断对象已死？可达性分析里哪些可作为 GC Roots？
 
-**答：** HotSpot 主要用 **可达性分析**（非引用计数）。**GC Roots** 常见：栈上引用、**方法区**静态属性引用、常量引用、**JNI**、**同步锁**持有对象、**JVM 内部** 等（具体集合以实现为准）。
+**答：** HotSpot 主要用 **可达性分析**（从根集合出发做图遍历，与根无关的对象可回收；**非**引用计数，不处理循环引用靠 RC）。**GC Roots** 是实现定义的根集合入口，常见类别与**举例**如下（口述能覆盖 4～5 类即可）：
+
+| 根类型 | 含义 | 例子（口述） |
+|--------|------|----------------|
+| **栈上引用** | 线程栈帧局部变量、参数里的引用 | `main` 里 `Object o = new Object()`，`o` 指向的对象从栈可达 |
+| **静态字段** | 已加载类的 `static` 引用 | `Holder.staticCache = new HashMap<>()`，`cache` 指向的 Map |
+| **运行时常量** | 常量池解析出的引用（如字符串相关） | 字面量、`String.intern()` 进入池后的引用（JDK7+ 池在堆） |
+| **JNI 引用** | Native 全局/局部强引用 | `NewGlobalRef` 未 `DeleteGlobalRef` 的 Java 对象 |
+| **同步监视器** | 正在执行且已持有 `synchronized(obj)` 的锁对象 | `synchronized(lock) { ... }` 执行期间 `lock` |
+| **活动线程等 JVM 内部** | 线程对象、部分 ClassLoader/Class、内部数据结构 | 存活 `Thread`、bootstrap 加载的核心类 |
+| **JVMTI 等** | 调试/Agent 固定引用 | 实现相关，面经提一句即可 |
+
+**追问：** **Remembered Set / 卡表** 不是 GC Root，是 **加速跨代扫描** 的辅助结构。
 
 ---
 
@@ -114,6 +127,9 @@
 | **G1** | 分区 Region、**可预期停顿**、Mixed GC；**JDK9+ 服务端默认** 常见 |
 | **ZGC** | **超低延迟**目标、染色指针、并发整理；**JDK15+** 逐步生产可用；高版本有 **分代 ZGC** 等演进（**以当前 JDK Release Notes 为准**） |
 | **Shenandoah** | 并发压缩、低停顿；**OpenJDK** 特性，与发行版是否包含有关；**JDK 25** 等版本继续迭代 **分代 Shenandoah** |
+| **Parallel（Throughput）** | 多线程 **STW** 回收，**吞吐优先**；小内存或批处理常见 |
+| **Serial** | **单线程** STW，客户端或极小堆、低端设备 |
+| **Epsilon** | **No-Op GC**（几乎不回收），**压测分配性能/短命任务** 或 **明确知晓无泄漏** 的场景 |
 
 面试答：**选型看延迟/吞吐/堆大小/版本**，并提 **STW** 与 **并发阶段**；**JDK 21 起** 服务端默认常见仍为 **G1**，**ZGC/Shenandoah** 多用于 **延迟敏感 / 大堆** 且 **验证过** 的环境。
 
@@ -126,6 +142,11 @@
 - **RSet**：记录 **谁引用了本 Region**，避免全堆扫描 **跨区引用**。  
 - **Mixed GC**：不仅 Young，还回收部分 **老年代 Region**（回收价值、停顿目标）。  
 - **SATB**：并发标记阶段 **快照**，处理并发修改带来的 **漏标** 问题（与写屏障配合）。
+
+**（高频补充）IHOP、Humongous：**  
+**IHOP**（Initiating Heap Occupancy Percent，如默认约 **45%**，且可**自适应**）表示当 **非年轻代占用** 达到阈值时触发 **并发标记**，为后续 **Mixed GC** 做准备（不是「堆总占用 45%」的朴素理解，以官方 GC 文档为准）。**Humongous 对象**：大小超过 Region 一半的对象占 **连续 Humongous Region**，常 **直接进老年代区**，大量短寿命大对象可能干扰 IHOP 与并发标记节奏；**JDK 11+** 等对 IHOP 与 Humongous 回收有持续修补，线上问题需 **对照具体小版本 Release Notes**。
+
+**（面经）`MaxGCPauseMillis`：** 目标而非硬保证；过小可能导致 **回收更频繁、吞吐下降**，需压测权衡。
 
 ---
 
@@ -197,7 +218,7 @@
 
 ### 19. `synchronized` 底层与锁升级（偏向→轻量→重量）？
 
-**答：** **monitor** 与 **对象头 Mark Word**；JDK6+ **偏向锁**（无竞争同线程）、**轻量级锁**（CAS 自旋）、**重量级锁**（操作系统 mutex）。**具体路径以版本与竞争为准**。
+**答：** **monitor** 与 **对象头 Mark Word**；历史上 JDK6+ **偏向锁**（无竞争同线程）、**轻量级锁**（CAS 自旋）、**重量级锁**（操作系统 mutex）。**版本演进（面试常追问）：** **JEP 374**，**JDK15** 起 **默认禁用偏向锁**（仍可用 `-XX:+UseBiasedLocking` 临时开启）；**JDK18 起偏向锁被移除**，不再有「偏向→撤销」路径，口述时应**按当前 JDK** 说明。**无锁/轻量/重量** 与 **竞争程度、自旋、膨胀** 仍常考；**具体路径以版本与竞争为准**。
 
 ---
 
@@ -377,11 +398,83 @@
 
 ### 42. SafePoint / Stop-The-World 口头关系？
 
-**答：** JVM 在 **安全点** 暂停线程做 **GC 根枚举、偏向锁撤销** 等；**STW** 阶段所有线程需 **跑到安全点**。**过多安全点** 或 **长时间不到达** 影响 **延迟**（与 **题 26 毛刺** 相关）。
+**答：** JVM 在 **安全点** 暂停线程做 **GC 根枚举、偏向锁撤销** 等；**STW** 阶段所有线程需 **跑到安全点**。**过多安全点** 或 **长时间不到达** 影响 **延迟**（与 **题 26 毛刺** 相关）。**JDK18+** 无偏向锁后，安全点相关表述仍以 **GC、去优化** 等为主。
 
 ---
 
-## 十、自测清单
+## 十、高频补充（GC 细节·收集器·版本演进）
+
+> 本节补充 **老年代/Humongous、浮动垃圾、跨代、类卸载、诊断、面经追问**；参数与行为以 **当前 JDK 官方 GC Tuning Guide** 为准。
+
+### 43. 什么情况会导致「老年代空间不足」或晋升失败？
+
+**答：** 本质是 **晋升 + 长期存活 + 大对象** 进入老年代的速率 **长期大于** 老年代 **回收 + 可用连续空间**。常见：**存活率过高**导致 Minor GC 后大量对象进老年代；**堆/老年代偏小**或 **年轻代过大**；**内存泄漏**（静态集合、缓存、监听器、线程池 **ThreadLocal** 未清理）；**Humongous/大数组** 挤占；**CMS 时代碎片**导致「总空闲够但没有连续块」；**并发 GC 跟不上分配**（如 CMS **Concurrent Mode Failure** 类问题，以历史版本为参考）。与 **题 24、9（Humongous）** 联动复习。
+
+### 44. 「浮动垃圾」（Floating Garbage）是什么？
+
+**答：** **并发标记** 期间用户线程仍在运行，**已死对象在标记时仍被当作存活**（或来不及处理），本轮回收 **暂不释放**，留给下次 GC。是 **用空间换停顿** 的代价，不是泄漏。**追问：** 与 **漏标** 区分——漏标是 **误回收存活**，浮动垃圾是 **延迟回收死亡**。
+
+### 45. 卡表（Card Table）与 G1 的 RSet 口头怎么区分？
+
+**答：** 二者都是 **记录跨区引用、避免全堆扫描** 的思路。**分代经典**：老年代切 **Card**，Young GC **Dirty Card** 里找指向新生代的引用。**G1**：**每个 Region 有 RSet**，记录 **哪些 Region 有引用指向本 Region**；实现上以 **Per-Region Table** 为主，**概念题**说清「** Granularity 与扫谁 **」即可。
+
+### 46. 类什么时候可能「卸载」？为什么很难？
+
+**答：** 需 **加载该类的 ClassLoader 可回收**（无引用）、**该类所有实例已死**、**无反射/ JNI 等强引用** 等条件同时满足；**Bootstrap/系统类** 基本不卸载。**OSGi、动态脚本、大量临时 ClassLoader** 若泄漏会导致 **Metaspace 涨**（见 **题 28**）。
+
+### 47. `invokedynamic` 与 Lambda 和 JVM 有什么关系？
+
+**答：** **字节码指令**；**Lambda** 与 **方法引用** 在实现上依赖 **` invokedynamic`** 绑定 **CallSite**（**Bootstrap Method**），**首次链接** 有一次性开销，热点后可 **JIT 内联**。**面经：** 与 **匿名内部类**（常多一个类文件）对比 **实现机制** 不同。
+
+### 48. Native Memory Tracking（NMT）是什么？
+
+**答：** **`-XX:NativeMemoryTracking=summary|detail`**，配合 **`jcmd VM.native_memory`** 看 **堆外**（元空间、线程栈、代码缓存、GC 等）占用；**容器 OOM** 排查常与 **题 27**、**Direct Memory** 一起看。
+
+### 49. JFR（Java Flight Recorder）面试怎么说？
+
+**答：** **低开销** 的事件采集，分析 **GC 停顿、分配、锁、IO、方法热点**；**JDK 商业协议与 OpenJDK 使用条款** 以当前版本为准。**与场景题 24、26** 对齐：**先 JFR/日志拿证据再调参**。
+
+### 50. GC 日志里常见触发原因口头解释？
+
+**答（示例名，以实际前缀与收集器为准）：** **Allocation Failure**（分配失败触发一次收集）；**Metadata GC Threshold**（元数据 GC）；**G1 Evacuation Pause**；**System.gc()**（显式）；**Ergonomics**（自适应触发）等。**面试：** 能说出 **「看日志第一行原因 + pause + 前后堆占用」**。
+
+### 51. 伪共享（False Sharing）与 JVM？
+
+**答：** **多核缓存行** 上不同变量被不同 CPU 修改导致 **缓存失效**；**`@Contended`**（JDK8）、**`@jdk.internal.vm.annotation.Contended`** 或 **padding** 缓解（**面经与并发文档** 联动）。**JIT** 可能对无关字段做布局优化，但 **缓存行** 仍是性能考点。
+
+### 52. `StrongReference / SoftReference / WeakReference / PhantomReference` 与 ReferenceQueue？
+
+**答：** **见题 33**；补充 **面经：** **Soft** 适合 **内存敏感缓存**；**Phantom** **get 总为 null**，用于 **回收后业务清理**（比 `finalize` 可控），需 **ReferenceQueue 轮询/线程消费**。**Cleaner**（DirectByteBuffer）类似思路。
+
+### 53. ZGC / Shenandoah 口头对比（加分项）？
+
+**答：** 均主打 **低停顿**、**并发整理**；**ZGC** 在 Oracle/OpenJDK 主线演进快（**分代 ZGC** 等以 Release Notes 为准）；**Shenandoah** 在 **Red Hat / 部分发行版** 场景常见。**共同追问：** **STW** 根枚举是否需 **停顿**、**读/写屏障** 成本、**平台与 JDK 版本**。
+
+### 54. 容器（Docker/K8s）里 JVM 内存还要注意什么？
+
+**答：** **`-Xmx` + 元空间 + 直接内存 + 栈 × 线程数 + CodeCache** 应 **小于 cgroup 限额**；使用 **`-XX:MaxRAMPercentage`**、**`-XX:InitialRAMPercentage`** 等让 JVM **读 cgroup**（版本差异查文档）；**题 27**。**误配：** 堆顶满 limit → **Killed**；堆过小 → **Heap OOM**。
+
+### 55. `append` 字符串与 `StringBuilder`？
+
+**答：** **编译器** 对 **纯常量** 拼接常 **编译期折叠**；**循环内** `+` 可能生成 **`StringBuilder`** 或次优代码，**热点** 应显式 **`StringBuilder`**；**字符串不可变性**、**常量池** 与 **题 5** 联动。
+
+---
+
+### （面经续）56～60 快问快答
+
+**56. `StackOverflowError` vs `OutOfMemoryError`（栈）？** 前者 **栈深度/递归**；后者 **线程过多创建栈失败**（如 `unable to create new native thread` 周边症状）。
+
+**57. 为什么需 happens-before 不能只信「最后一次写」？** **重排序** 与 **可见性** 无保证；需 **volatile/锁** 建立 **顺序与可见**。
+
+**58. DCL 单例为何要用 `volatile`？** 防止 **构造与引用发布** 被重排序导致 **读到未构造完成的对象**。
+
+**59. `synchronized` 可重入如何实现？** **同线程** 重复 **获取 monitor**，计数 **recursion/重入计数**（概念）；**object header** 与 **重量级** 结构相关。
+
+**60. `wait/notify` 为何要在同步块里？** 需 **持有同一 monitor** 才能 **释放/唤醒** 语义正确，否则 **`IllegalMonitorStateException`**。
+
+---
+
+## 十一、自测清单
 
 | 域 | 一句话 |
 |----|--------|
@@ -403,7 +496,13 @@
 | 场景 | **Full GC、Direct、容器、cgroup** |
 | 进阶 | **TLAB、引用、Card Table、JPMS** |
 | 面经 | **题 38～42** |
+| GC 深入 | **GC Roots 表、老年代不足、浮动垃圾、卡表 vs RSet** |
+| G1 | **IHOP、Humongous、`MaxGCPauseMillis` 语义** |
+| 版本 | **偏向锁 JDK15/18、Epsilon、Parallel/Serial** |
+| 诊断 | **NMT、JFR、GC 日志触发原因** |
+| 其他 | **类卸载、`invokedynamic`/Lambda、容器内存、伪共享** |
+| 快问 | **题 56～60** |
 
 ---
 
-*路径：`interview/jvm/jvm-interview.md`（含 **九、面经普通题补充**）*
+*路径：`interview/jvm/jvm-interview.md`（含 **九、十、（面经续）**；持续对照 [Oracle GC Tuning](https://docs.oracle.com/en/java/javase/21/gctuning/) 与当前 JDK Release Notes。）*
