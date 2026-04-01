@@ -17,7 +17,9 @@
 9. [面经高频补充](#九面经高频补充)
 10. [自测清单](#十自测清单)
 
-> **复习：** 先能用一张图画出 **2PC 阻塞点** 与 **TCC 悬挂/空回滚**，再背 **Outbox vs 本地消息表** 与 **Seata AT 镜像回滚**；所有方案收口到 **幂等键 + 对账**。
+> **图文专节位置：** **第二节** 末 **2PC / 3PC**，**第三节** 末 **TCC**，**第六节** 末 **Seata**（均为 **Mermaid**，Markdown 预览即可渲染）。
+
+> **复习：** 先能用一张图画出 **2PC 阻塞点** 与 **TCC 悬挂/空回滚**，再背 **Outbox vs 本地消息表** 与 **Seata AT 镜像回滚**；所有方案收口到 **幂等键 + 对账**。**二 / 三 / 六章** 末附有 **Mermaid 图文**（预览本文件即可渲染）。
 
 ---
 
@@ -80,6 +82,93 @@
 
 ---
 
+### （图文）2PC / 3PC：角色、场景、流程与时序
+
+**图表说明：** 下方为 **Mermaid**，在 **Cursor / VS Code Markdown 预览** 或 **GitHub 浏览** 时可直接渲染。
+
+#### 2PC 角色与阶段（与上文题 4、6 对照）
+
+| 角色 | 职责 |
+|------|------|
+| **协调者（Coordinator / TM）** | 发起两阶段、收集投票、下发 Commit 或 Abort |
+| **参与者（Participant / RM）** | 执行本地事务到「可提交」状态；Prepare 后持锁等待全局决定 |
+
+**典型场景：** **跨库转账**（两个独立数据库）、**低并发核心账务** 在可接受延迟下追求 **协议级强一致**；与 **XA/JTA** 常一起出现（XA 定义接口，提交协议多为 **2PC**）。
+
+**阻塞点（面试常画）：** Prepare 之后到 Commit/Abort 之前，参与者 **资源锁定**，协调者 **单点**；协调者宕机可能导致参与者 **长时间不确定**，依赖 **超时与恢复日志**。
+
+#### 2PC 时序：全部成功
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 协调者 TM
+    participant P1 as 参与者 RM1
+    participant P2 as 参与者 RM2
+
+    C->>P1: Phase1 Prepare
+    C->>P2: Phase1 Prepare
+    P1-->>C: Yes（已就绪，未提交）
+    P2-->>C: Yes
+    Note over C: 全部 Yes
+    C->>P1: Phase2 Commit
+    C->>P2: Phase2 Commit
+    P1-->>C: OK
+    P2-->>C: OK
+```
+
+#### 2PC 时序：任一反对或超时 → 中止
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 协调者
+    participant P1 as 参与者A
+    participant P2 as 参与者B
+
+    C->>P1: Prepare
+    C->>P2: Prepare
+    P1-->>C: Yes
+    P2-->>C: No（或超时）
+    C->>P1: Abort / Rollback
+    C->>P2: Abort / Rollback
+```
+
+#### 3PC 相对 2PC（与上文题 5 对照）
+
+**思路：** 在「准备」与「最终提交」之间增加阶段（常见教材称 **CanCommit → PreCommit → DoCommit** 等，命名因资料略有差异），并引入 **超时推进**，试图 **减轻参与者无限期阻塞**。
+
+**典型场景：** 多出现在 **教材、论文与协议讨论**；**工业界** 大规模默认选型仍多为 **2PC/XA 有限场景** 或 **业务层 TCC / Saga / 消息最终一致**。
+
+**未普及原因：** **多一轮网络**、实现复杂；**网络分区** 下仍难同时满足极端 **CAP** 语义；工程上更愿用 **最终一致 + 幂等 + 对账**。
+
+#### 3PC 概念时序（成功路径，简化）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 协调者
+    participant P as 参与者
+
+    C->>P: 1 CanCommit?
+    P-->>C: OK
+    C->>P: 2 PreCommit
+    P-->>P: 进入可提交中间态
+    P-->>C: ACK
+    C->>P: 3 DoCommit
+    P-->>C: 已提交
+```
+
+#### 2PC vs 3PC 收口表
+
+| 维度 | 2PC | 3PC |
+|------|-----|-----|
+| 轮次 | 2 阶段 | 通常 3 阶段 |
+| 阻塞 | Prepare 后长锁窗口明显 | 试图用超时缓解，但代价是复杂度 |
+| 工程地位 | XA 等仍可见 | **未成为** 主流微服务默认方案 |
+
+---
+
 ## 三、TCC
 
 ### 7. TCC 三个字母分别做什么？
@@ -105,6 +194,65 @@
 
 ---
 
+### （图文）TCC：阶段语义、场景、成功/失败时序
+
+**图表说明：** **Mermaid** 同前，预览本文件即可。
+
+#### 三阶段语义（与上文题 7、8 对照）
+
+| 阶段 | 含义 | 库存示例 |
+|------|------|----------|
+| **Try** | **预留资源**，不完成最终业务副作用 | 冻结库存、写冻结流水 |
+| **Confirm** | **确认**，消费预留 | 冻结转真实扣减 |
+| **Cancel** | **取消**，释放预留 | 解冻库存 |
+
+**特点：** 各阶段在**各服务内**均为 **本地事务**；**无** XA 那种跨库 **Prepare 长锁窗口**，但必须治理 **空回滚、悬挂、Confirm/Cancel 幂等**（题 8）。
+
+**典型场景：** **库存 / 优惠券 / 余额** 等「预留 → 确认或释放」；**支付预授权**（Try≈冻结额度，Confirm≈扣款，Cancel≈释放）；**高并发** 下愿用 **业务复杂度** 换 **性能上限**。
+
+#### 成功路径时序（两参与者）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant TM as 事务管理器/编排
+    participant S1 as 服务A Try/Confirm
+    participant S2 as 服务B Try/Confirm
+
+    TM->>S1: Try
+    TM->>S2: Try
+    S1-->>TM: OK
+    S2-->>TM: OK
+    TM->>S1: Confirm
+    TM->>S2: Confirm
+```
+
+#### 失败路径：某一 Try 失败 → 已 Try 分支 Cancel
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant TM as TM
+    participant S1 as 服务A
+    participant S2 as 服务B
+
+    TM->>S1: Try
+    TM->>S2: Try
+    S1-->>TM: OK
+    S2-->>TM: FAIL
+    TM->>S1: Cancel 释放预留
+```
+
+#### 与 2PC / XA 的直观对比
+
+| 维度 | 2PC / XA | TCC |
+|------|----------|-----|
+| 实现层 | 数据库/资源管理器 **协议** | **业务代码** 三接口 |
+| 锁与吞吐 | Prepare 后 **阻塞窗口长** | 依赖 **预留模型**，通常更易控热点 |
+| 代价 | 协调者与长锁 | **侵入大** + **幂等/悬挂/空回滚** 治理 |
+
+---
+
 ## 四、Saga
 
 ### 10. Saga 是什么？编排 vs 协同？
@@ -124,6 +272,109 @@
 ### 12. 本地消息表模式流程？
 
 **答：** **业务写 DB** 与 **插入消息表** 同事务提交；**后台任务扫描** `pending` 消息 **投递 MQ** → **成功后更新状态**。**优点：** **实现直观**。**缺点：** **轮询延迟**、**DB 压力**、需 **清理历史**。**改进：** **Outbox** + **Debezium CDC** 读 binlog 发 Kafka（减少轮询）。
+
+---
+
+### （图文）MQ + 本地消息表：流程图与时序图（电商下单 → 扣库存）
+
+以下用 **同一业务场景** 串起：**订单服务** 本地落库 **订单 + Outbox**，**投递组件** 将消息发到 **MQ**，**库存服务** **幂等** 扣减。
+
+**图表说明：** 下方正文使用 **Mermaid**，在 **Cursor / VS Code** 打开本文件后按 **Markdown 预览**（或 GitHub 网页浏览仓库）即可直接渲染，无需额外插件。若需要 **PlantUML** 主题与矢量导出，可使用同目录 [`diagrams/mq-outbox-flow.puml`](./diagrams/mq-outbox-flow.puml)、[`diagrams/mq-outbox-sequence.puml`](./diagrams/mq-outbox-sequence.puml) 在 [PlantUML 官网](https://www.plantuml.com/plantuml/uml) 或本地 PlantUML 插件中打开。
+
+#### 场景设定
+
+| 角色 | 职责 |
+|------|------|
+| **订单服务 + 同一库** | 同事务写入 `orders` 与 `outbox_message`（`PENDING`） |
+| **投递器（Sender / Relay）** | 扫描或 CDC 触发，向 MQ 发送，成功后标记 `SENT` |
+| **MQ** | 至少一次投递，可能重复 |
+| **库存服务** | 按 `orderId` / `messageId` **幂等** 扣库存 |
+
+#### 整体流程图（从下单到最终一致）
+
+```mermaid
+flowchart TB
+    subgraph TX["① 同一本地数据库事务"]
+        A[用户下单请求] --> B[写入 orders 订单记录]
+        B --> C["写入 outbox_message<br/>status=PENDING · payload=订单已创建"]
+        C --> D{COMMIT 成功?}
+    end
+    D -->|否| E[全部回滚<br/>无订单、无消息]
+    D -->|是| F[事务结束<br/>订单与待发事实已持久化]
+
+    F --> G[投递器读取 PENDING]
+    G --> H[发送到 MQ Topic]
+    H --> I{发送成功?}
+    I -->|否| J[保留 PENDING<br/>退避重试 / 告警]
+    J --> G
+    I -->|是| K[更新 outbox 为 SENT<br/>或删除记录]
+    K --> L[MQ 持久化]
+
+    L --> M[库存服务消费]
+    M --> N{幂等校验?}
+    N -->|重复消息| O[跳过扣减 · 仅 ACK<br/>不重复扣减]
+    N -->|首次| P[扣减库存 / 更新状态]
+    P --> Q[ACK 消息]
+    O --> Q
+
+    style TX fill:#ECEFF1,stroke:#3949AB
+    style E fill:#FFCDD2,stroke:#C62828
+    style F fill:#C8E6C9,stroke:#2E7D32
+    style J fill:#FFF9C4,stroke:#F9A825
+    style O fill:#B3E5FC,stroke:#0277BD
+    style Q fill:#E8F5E9,stroke:#2E7D32
+```
+
+**读图要点：** 「业务事实」与「待发事件」在 **一个事务** 里对齐；**发 MQ** 在事务外，靠 **重试** 达到 **至少一次**；**最终一致** 靠消费端 **幂等** 收敛。
+
+#### 时序图（组件交互）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 用户/网关
+    participant OS as 订单服务
+    participant DB as 订单库_orders_outbox
+    participant SD as 投递器
+    participant MQ as MQ Broker
+    participant IS as 库存服务
+    participant IDB as 库存库
+
+    U->>OS: 下单
+    OS->>DB: BEGIN TRANSACTION
+    OS->>DB: INSERT orders
+    OS->>DB: INSERT outbox_message (PENDING)
+    OS->>DB: COMMIT
+    DB-->>OS: OK
+
+    Note over SD,DB: 异步：轮询 / 短延迟调度 / CDC
+    SD->>DB: SELECT ... WHERE status=PENDING LIMIT n
+    DB-->>SD: 待发送行
+    SD->>MQ: Publish(orderCreated)
+    MQ-->>SD: ACK
+    SD->>DB: UPDATE outbox SET status=SENT
+
+    MQ->>IS: Push / Poll 消息
+    IS->>IDB: 幂等检查(orderId)
+    alt 首次处理
+        IDB-->>IS: 未扣过
+        IS->>IDB: 扣减库存 / 记处理流水
+        IS->>MQ: ACK
+    else 重复投递
+        IDB-->>IS: 已处理
+        IS->>MQ: ACK（不重复扣）
+    end
+```
+
+**时序要点：** 订单与 Outbox 的 **BEGIN…COMMIT** 保证同事务；随后 **投递器 ↔ MQ ↔ 更新 outbox** 为异步投递（若先标 SENT 再发 MQ 失败，需可重发或补偿）；最后 **MQ → 库存** 体现 **至少一次投递 + 消费幂等**。
+
+#### 与「最终一致」的对应关系
+
+| 阶段 | 可能的不一致窗口 | 如何收口 |
+|------|------------------|----------|
+| Commit 后、投递前 | 订单已有，下游未收到 | 投递器重试直至 SENT |
+| MQ 重复 | 库存可能收到多条 | 消费者 **幂等** |
+| 消费失败 | 订单已建，库存未扣 | **重试 / DLQ** + **业务补偿**（关单、释放） |
 
 ---
 
@@ -186,6 +437,64 @@
 ### 20. Seata 与注册中心、配置中心？
 
 **答：** TC 常 **注册到 Nacos/Eureka** 等；**高可用 TC 集群** 依赖 **存储（DB/Redis/Raft 等，随版本演进）**。**面经：** **TC 挂了怎么办** → **未完成全局事务** 的 **恢复与超时回滚**（结合 **存储模式**）。
+
+---
+
+### （图文）Seata：TC/TM/RM、AT 成功路径与选型总表
+
+**说明：** **Seata** 为应用侧分布式事务框架；下文与上文题 16–20、18 对照。**图表** 为 **Mermaid**。
+
+#### 角色关系（题 19 展开）
+
+| 角色 | 职责 |
+|------|------|
+| **TC** | 服务端协调全局事务与分支状态，驱动二阶段提交/回滚 |
+| **TM** | 开启/提交/回滚全局事务（如 `@GlobalTransactional`） |
+| **RM** | 注册分支、执行本地一阶段与二阶段指令（如 AT 写 UNDO、释锁） |
+
+```mermaid
+flowchart TB
+    TM[TM 开启全局事务] --> TC[TC 协调]
+    RM1[RM 订单库] --> TC
+    RM2[RM 库存库] --> TC
+    TC --> RM1
+    TC --> RM2
+```
+
+#### AT 模式一、二阶段（题 16、17 对照）
+
+- **一阶段：** 业务 SQL **本地提交**；RM **拦截** SQL，写 **before/after 镜像** 至 **UNDO_LOG**，申请 **全局锁**（防并发脏写导致回滚语义错误）。
+- **二阶段成功：** 异步删 **UNDO_LOG**，释放全局锁。
+- **二阶段回滚：** 按镜像生成 **反向 SQL** 恢复。
+
+**典型场景：** **微服务 + 多数据源**，以 **CRUD** 为主、希望 **低侵入** 快速接入；需评估 **全局锁**、**热点行** 与 **隔离语义**（题 17、29）。
+
+#### AT 成功路径时序（简化）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant TM
+    participant TC
+    participant RM1 as RM订单
+    participant RM2 as RM库存
+
+    TM->>TC: begin global tx
+    TM->>RM1: 业务SQL + 写UNDO + 全局锁
+    TM->>RM2: 业务SQL + 写UNDO + 全局锁
+    TM->>TC: commit global
+    TC->>RM1: phase2 清理UNDO
+    TC->>RM2: phase2 清理UNDO
+```
+
+#### 2PC / 3PC / TCC / Seata（AT）选型总表（面试收口）
+
+| 方案 | 一致性/体验 | 典型场景 | 主要代价 |
+|------|-------------|----------|----------|
+| **2PC/XA** | 协议级强一致 | 跨库、低并发、兼容传统 | 阻塞、锁长、协调者风险 |
+| **3PC** | 理论减轻阻塞 | 教材/协议讨论为主 | 复杂度高，**非**主流微服务默认 |
+| **TCC** | 业务级预留语义 | 库存/余额/券、高性能预留 | 侵入大、空回滚/悬挂/幂等 |
+| **Seata AT** | 应用层自动补偿 | CRUD 微服务快速落地 | 全局锁、镜像、隔离理解成本 |
 
 ---
 
@@ -285,4 +594,4 @@
 
 ---
 
-*路径：`interview/distributed-transaction/distributed-transaction-interview.md`（含 **九、面经高频补充**）*
+*路径：`interview/distributed-transaction/distributed-transaction-interview.md`（含 **九、面经高频补充**；**二 / 三 / 六** 章末 **2PC·3PC·TCC·Seata 图文**）*

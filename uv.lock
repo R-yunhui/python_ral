@@ -325,6 +325,15 @@ wheels = [
 ]
 
 [[package]]
+name = "backoff"
+version = "2.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba", size = 17001, upload-time = "2022-10-05T19:19:32.061Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8", size = 15148, upload-time = "2022-10-05T19:19:30.546Z" },
+]
+
+[[package]]
 name = "banks"
 version = "2.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1974,6 +1983,24 @@ wheels = [
 ]
 
 [[package]]
+name = "mem0ai"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "openai" },
+    { name = "posthog" },
+    { name = "protobuf" },
+    { name = "pydantic" },
+    { name = "pytz" },
+    { name = "qdrant-client" },
+    { name = "sqlalchemy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e2/78/9688a8c7046bbe5a9f5932eceb1dd953b40b80831cba7aa9fdec0a65370b/mem0ai-1.0.9.tar.gz", hash = "sha256:925953b88374c3dce0f07a93c0585ef7ad5acd6bcdd2e4015ecaf5a7eab476c2", size = 199752, upload-time = "2026-03-28T17:15:33.473Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/31/5c66b0c01000cf3b0f61c0801ab9af7feadf7a9e4a0b5668cf5962263124/mem0ai-1.0.9-py3-none-any.whl", hash = "sha256:5153883da8f49296de763f4f92876ce3d4ee7daf7f596e3d4feb3a1709d3c4b0", size = 294561, upload-time = "2026-03-28T17:15:31.722Z" },
+]
+
+[[package]]
 name = "multidict"
 version = "6.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2460,6 +2487,23 @@ wheels = [
 ]
 
 [[package]]
+name = "posthog"
+version = "7.9.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "backoff" },
+    { name = "distro" },
+    { name = "python-dateutil" },
+    { name = "requests" },
+    { name = "six" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1c/a7/2865487853061fbd62383492237b546d2d8f7c1846272350d2b9e14138cd/posthog-7.9.12.tar.gz", hash = "sha256:ebabf2eb2e1c1fbf22b0759df4644623fa43cc6c9dcbe9fd429b7937d14251ec", size = 176828, upload-time = "2026-03-12T09:01:15.184Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/65/a9/7a803aed5a5649cf78ea7b31e90d0080181ba21f739243e1741a1e607f1f/posthog-7.9.12-py3-none-any.whl", hash = "sha256:7175bd1698a566bfea98a016c64e3456399f8046aeeca8f1d04ae5bf6c5a38d0", size = 202469, upload-time = "2026-03-12T09:01:13.38Z" },
+]
+
+[[package]]
 name = "propcache"
 version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2928,6 +2972,7 @@ dependencies = [
     { name = "llama-index-embeddings-langchain" },
     { name = "llama-index-llms-langchain" },
     { name = "llama-index-vector-stores-qdrant" },
+    { name = "mem0ai" },
     { name = "passlib", extra = ["bcrypt"] },
     { name = "pymysql" },
     { name = "pypdf" },
@@ -2964,6 +3009,7 @@ requires-dist = [
     { name = "llama-index-embeddings-langchain", specifier = ">=0.4.1" },
     { name = "llama-index-llms-langchain", specifier = ">=0.7.2" },
     { name = "llama-index-vector-stores-qdrant", specifier = ">=0.9.1" },
+    { name = "mem0ai", specifier = ">=1.0.9" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
     { name = "pymysql", specifier = ">=1.1.0" },
     { name = "pypdf", specifier = ">=3.0.0" },

@@ -1,0 +1,50 @@
+@startuml mq-outbox-flow
+!theme cerulean-outline
+skinparam backgroundColor #FAFBFC
+skinparam shadowing false
+skinparam activity {
+  BackgroundColor #E8EAF6
+  BorderColor #3949AB
+  FontSize 13
+  DiamondBackgroundColor #FFF8E1
+  DiamondBorderColor #F9A825
+}
+skinparam arrowColor #5C6BC0
+title MQ + 本地消息表 · 整体流程（电商下单 → 扣库存）
+
+|#ECEFF1|**① 同一本地数据库事务**|
+start
+:用户下单请求;
+:写入 **orders** 订单记录;
+:写入 **outbox_message**\n//status=PENDING// · payload=订单已创建事件;
+if (COMMIT 成功?) then (否)
+  #FFCDD2:全部回滚\n—— 无订单、无消息;
+  stop
+else (是)
+endif
+
+|#E8F5E9|**② 事务已提交**|
+#C8E6C9:订单与待发事实已持久化;
+
+|#E3F2FD|**③ 异步投递（事务外）**|
+repeat
+  :投递器读取 **PENDING**;
+  :发送到 MQ Topic;
+  if (发送成功?) then (否)
+    #FFF9C4:保留 PENDING\n退避重试 / 告警;
+  endif
+repeat while (发送成功?) is (否) not (是)
+:更新 outbox 为 **SENT**\n或删除记录;
+
+|#F3E5F5|**④ MQ 与消费者**|
+:MQ 持久化;
+:库存服务消费;
+if (幂等校验?) then (重复消息)
+  #B3E5FC:跳过扣减 · 仅 ACK\n不重复扣减;
+else (首次)
+  :扣减库存 / 更新状态;
+  :ACK 消息;
+endif
+
+stop
+@enduml

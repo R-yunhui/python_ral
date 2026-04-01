@@ -1,0 +1,59 @@
+@startuml mq-outbox-sequence
+!theme cerulean-outline
+skinparam backgroundColor #FAFBFC
+skinparam sequenceMessageAlign center
+skinparam responseMessageAlign center
+skinparam ParticipantPadding 14
+skinparam BoxPadding 8
+
+autonumber "<b>##."
+
+actor "用户 / 网关" as U #E3F2FD
+participant "订单服务" as OS #BBDEFB
+database "订单库\n(orders + outbox)" as DB #FFF8E1
+participant "投递器" as SD #C8E6C9
+queue "MQ Broker" as MQ #FFE0B2
+participant "库存服务" as IS #E1BEE7
+database "库存库" as IDB #FFF8E1
+
+U -> OS ++ : 下单
+OS -> DB ++ : BEGIN TRANSACTION
+OS -> DB : INSERT orders
+OS -> DB : INSERT outbox_message (PENDING)
+OS -> DB : COMMIT
+DB --> OS : OK
+deactivate DB
+deactivate OS
+
+|||
+note over SD, DB #FFFDE7
+  **异步触发**：轮询 · 短延迟调度 · **CDC**
+end note
+
+SD -> DB ++ : SELECT ... WHERE status=PENDING LIMIT n
+DB --> SD : 待发送行
+deactivate DB
+
+SD -> MQ ++ : Publish(orderCreated)
+MQ --> SD : ACK
+deactivate MQ
+
+SD -> DB ++ : UPDATE outbox SET status=SENT
+deactivate DB
+
+|||
+MQ -> IS ++ : Push / Poll 消息
+IS -> IDB ++ : 幂等检查(orderId)
+
+alt 首次处理
+  IDB --> IS : 未扣过
+  IS -> IDB : 扣减库存 / 记处理流水
+else 重复投递
+  IDB --> IS : 已处理
+end
+
+IS -> MQ : ACK（重复亦安全）
+deactivate IDB
+deactivate IS
+
+@enduml
