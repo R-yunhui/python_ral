@@ -3,6 +3,7 @@ import os
 import asyncio
 import json
 import logging
+import questionary
 
 from dotenv import load_dotenv
 from typing import Any, Literal, Optional, TypedDict
@@ -31,9 +32,9 @@ from prompt import (
     EVALUATE_REPORT_HUMAN_PROMPT,
 )
 
-MAX_REGENERATE_COUNT = 3
+MAX_REGENERATE_COUNT = 1
 
-MAX_EVALUATE_SCORE = 85
+MAX_EVALUATE_SCORE = 90
 
 
 # 加载环境变量
@@ -92,18 +93,27 @@ def extract_json(content: str) -> dict[str, Any] | None:
 
 
 def _prompt_confirm_generate(interrupts: Any) -> str:
-    """在本地终端阻塞读取，返回「是」或「否」，供 Command(resume=...) 使用。"""
-    print("\n---------- 人工确认 ----------")
+    """在本地终端阻塞读取，返回「是」或「否」，供 Command(resume=...) 使用。
+    Windows：终端列出 [1] 是 / [2] 否，按数字键 1 或 2（无需回车）。"""
+    logger.info("\n---------- 人工确认 ----------")
+    message = ""
     if interrupts:
         seq = interrupts if isinstance(interrupts, (list, tuple)) else (interrupts,)
-        for i, item in enumerate(seq):
+        for _, item in enumerate(seq):
             val = getattr(item, "value", item)
-            print(f"[interrupt {i}] {val}")
-    while True:
-        line = input("是否根据上述主题生成报告？请输入「是」或「否」后回车: ").strip()
-        if line in ("是", "否"):
-            return line
-        print("无效输入，请只输入「是」或「否」（不含引号）。")
+            message += val.get("message", "")
+
+    choice = questionary.select(
+        message + "\n请用 ↑↓ 选择，回车确认：",
+        choices=[
+            questionary.Choice("是", value="是"),
+            questionary.Choice("否", value="否"),
+        ],
+        use_shortcuts=False,
+    ).ask()
+    if choice is None:
+        raise KeyboardInterrupt
+    return choice
 
 
 # 定义图中的节点
@@ -271,6 +281,7 @@ async def cancel_report_node(state: ReportAgentState) -> dict[str, Any]:
 
 
 async def answer_node(state: ReportAgentState) -> dict[str, Any]:
+    logger.info("节点开始: answer_node")
     return {
         "answer": "用户已经生成完成报告",
     }
@@ -290,6 +301,7 @@ async def create_report_agent_graph() -> CompiledStateGraph[ReportAgentState]:
     graph.add_node("answer_node", answer_node)
 
     graph.add_edge(START, "human_confirm_generate_report_node")
+    # 条件边：用户确认生成报告
     graph.add_conditional_edges(
         "human_confirm_generate_report_node",
         after_user_confirm_condition,
@@ -299,6 +311,7 @@ async def create_report_agent_graph() -> CompiledStateGraph[ReportAgentState]:
         },
     )
     graph.add_edge("generate_report_node", "evaluate_report_node")
+    # 条件边：评价报告验证分数是否需要重试生成报告
     graph.add_conditional_edges(
         source="evaluate_report_node",
         path=regenerate_report_condition,
@@ -308,6 +321,17 @@ async def create_report_agent_graph() -> CompiledStateGraph[ReportAgentState]:
             "human_confirm_regenerate_node": "human_confirm_regenerate_node",
         },
     )
+
+    # 条件边：超过重试次数之后, 用户确认是否继续重试生成报告
+    graph.add_conditional_edges(
+        source="human_confirm_regenerate_node",
+        path=after_user_confirm_regenerate_condition,
+        path_map={
+            "generate_report_node": "generate_report_node",
+            "answer_node": "answer_node",
+        },
+    )
+
     graph.add_edge("cancel_report_node", END)
     graph.add_edge("answer_node", END)
 
@@ -335,7 +359,7 @@ async def chat(query: str, user_id: str) -> dict[str, Any]:
         config=config,
     )
 
-    if result.get("__interrupt__"):
+    while result.get("__interrupt__"):
         logger.info("收到 interrupt，等待终端输入确认…")
         resume_value = await asyncio.to_thread(
             _prompt_confirm_generate,
@@ -350,7 +374,16 @@ async def chat(query: str, user_id: str) -> dict[str, Any]:
         "图执行结束: report_content_len=%d",
         len(result.get("report_content") or ""),
     )
-    logger.debug("最终报告内容: %s", result.get("report_content"))
+
+    logger.info(
+        "是否生成报告: %s 报告得分: %s 重试次数: %s 是否达到最大重试次数后继续重试: %s \n\n评价内容: %s \n\n报告内容: %s ",
+        result.get("confirm_generate_report", None),
+        result.get("evaluate_score", 0),
+        result.get("regenerate_count", -1),
+        result.get("confirm_regenerate", None),
+        result.get("evaluate_content", "无评价内容"),
+        result.get("report_content", "无报告内容"),
+    )
     return result
 
 
