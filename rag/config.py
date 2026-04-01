@@ -55,6 +55,17 @@ DEFAULT_LLM_MODEL = os.getenv("QWEN_CHAT_MODEL", "qwen-plus")
 DEFAULT_TOP_K = 3         # 默认检索文档数
 MAX_TOP_K = 10           # 最大检索文档数
 
+
+def _env_bool(key: str, default: bool = True) -> bool:
+    v = os.getenv(key)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+# RAG：检索前是否用 LLM 将用户问题改写为更适合向量检索的查询（环境变量 RAG_QUERY_REWRITE，默认开启）
+RAG_QUERY_REWRITE_ENABLED = _env_bool("RAG_QUERY_REWRITE", True)
+
 # ==================== 辅助函数 ====================
 
 def get_document_storage_path(kb_id: int) -> Path:

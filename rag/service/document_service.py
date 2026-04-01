@@ -16,7 +16,7 @@ from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings, 
 from llama_index.embeddings.langchain import LangchainEmbedding
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 
-from rag.models.models import Document, DocumentStatus
+from rag.models.models import Document, DocumentStatus, KnowledgeBase
 from rag.config import (
     SUPPORTED_EXTENSIONS,
     CHUNK_SIZE,
@@ -143,6 +143,11 @@ class DocumentService:
 
             logger.info(f"文档加载成功，共 {len(documents)} 个文档块")
 
+            # 与数据库主键对齐，便于 Qdrant 按 doc_id 删除（见 delete_document）
+            ref_id = str(doc.id)
+            for li_doc in documents:
+                li_doc.id_ = ref_id
+
             # 创建向量存储并索引文档
             logger.debug(f"创建向量存储，集合：{collection_name}")
             vector_store = QdrantVectorStore(
@@ -157,7 +162,19 @@ class DocumentService:
                 storage_context=storage_context,
                 embed_model=self.embed_model,
             )
-            logger.info(f"向量化处理完成，索引大小：{len(index.ref_doc_info)}")
+            # Qdrant 等「文本存在向量库里」的集成未实现 ref_doc_info，不能 len(index.ref_doc_info)
+            try:
+                n_points = self.client.count(
+                    collection_name=collection_name, exact=True
+                ).count
+                logger.info(
+                    f"向量化处理完成，集合 {collection_name} 当前向量点数：{n_points}"
+                )
+            except Exception as e:
+                logger.info(
+                    f"向量化处理完成，源文档块数：{len(documents)}"
+                )
+                logger.debug(f"查询 Qdrant 向量点数失败：{e}")
 
             # 更新状态为完成
             doc.status = DocumentStatus.COMPLETED
@@ -248,13 +265,31 @@ class DocumentService:
         return session.get(Document, doc_id)
 
     def delete_document(self, session: Session, doc_id: int) -> bool:
-        """删除文档"""
+        """删除文档：Qdrant 向量、本地文件与数据库记录。"""
         logger.info(f"删除文档：ID={doc_id}")
         try:
             doc = session.get(Document, doc_id)
             if not doc:
                 logger.warning(f"文档不存在：ID={doc_id}")
                 return False
+
+            kb = session.get(KnowledgeBase, doc.kb_id)
+            if kb and kb.collection_name:
+                try:
+                    vector_store = QdrantVectorStore(
+                        client=self.client,
+                        collection_name=kb.collection_name,
+                    )
+                    vector_store.delete(ref_doc_id=str(doc_id))
+                    logger.info(
+                        f"已从 Qdrant 删除文档向量：doc_id={doc_id}, "
+                        f"collection={kb.collection_name}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"删除 Qdrant 向量失败（仍将删除文件与记录）：{e}",
+                        exc_info=True,
+                    )
 
             # 删除文件
             try:

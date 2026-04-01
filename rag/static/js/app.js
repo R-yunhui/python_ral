@@ -284,7 +284,7 @@ const app = createApp({
           type: 'warning',
         });
 
-        await apiRequest(`/api/documents/${docId}`, {
+        await apiRequest(`/api/kb/documents/${docId}`, {
           method: 'DELETE',
         });
 
