@@ -56,5 +56,4 @@ def chat_with_model(query: str):
 
 
 if __name__ == "__main__":
-    response = chat_with_model("你好，我是小明，请介绍一下你自己。")
-    print(response)
+    chat_with_model("你好，我是小明，请介绍一下你自己。")

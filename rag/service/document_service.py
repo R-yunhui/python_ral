@@ -6,7 +6,7 @@
 import os
 from pathlib import Path
 from typing import List, Optional
-from sqlmodel import Session, select
+from sqlmodel import Session, desc, select
 
 from dotenv import load_dotenv
 
@@ -236,7 +236,7 @@ class DocumentService:
         statement = (
             select(Document)
             .where(Document.kb_id == kb_id)
-            .order_by(Document.created_at.desc())
+            .order_by(desc(Document.created_at))
         )
         documents = session.exec(statement).all()
         logger.info(f"获取到 {len(documents)} 个文档")
