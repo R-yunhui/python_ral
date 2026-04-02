@@ -1,6 +1,6 @@
 # LangGraph 与 LangChain Agent 学习笔记
 
-> 便于复习：图编排、`create_agent`、中间件、记忆与存储、编译/调用参数、`interrupt`、**HumanInTheLoop** 与节点内 `interrupt` 对比、demo 对照说明。  
+> 便于复习：图编排、`create_agent`、中间件、记忆与存储、编译/调用参数、`interrupt`、**HumanInTheLoop** 与节点内 `interrupt` 对比、**节点 Cache**（§15）、demo 对照说明。  
 > 环境参考：`langchain` 1.2.x、`langgraph` 1.x、`deepagents`（可选）。
 
 ---
@@ -69,7 +69,7 @@
 |------|--------|----------|
 | **Checkpointer** | 按 `thread_id` 的**图执行快照**（channel 状态、步骤、interrupt 点等） | 同一会话**续跑**、`interrupt`/`Command(resume)`、多轮 state |
 | **Store** | **跨 thread** 的命名空间 KV/文档（可选向量检索） | 长期记忆、用户画像、跨会话知识；**需主动读写** |
-| **Cache** | 带 TTL 的缓存键值 | **加速**重复计算；可清空，非「会话真相来源」 |
+| **Cache** | 带 TTL 的缓存键值 | **加速**重复计算；可清空，非「会话真相来源」（**语义与 Checkpointer 正交，详见 §15**） |
 
 **上下文怎么理解：**
 
@@ -178,6 +178,7 @@
 |------|----------|
 | `01_langgraph_demo.py` | 手写 `StateGraph` / `ReportAgentState` 工作流、节点内 **`interrupt`** + **`Command(resume)`**、**Checkpointer** 与 `thread_id`。 |
 | `02_langgraph_demo.py` | **`create_agent`**、`SummarizationMiddleware`、**`@after_model`** / **`@wrap_tool_call`（async）**、**`HumanInTheLoopMiddleware`**；用 **`astream`** 消费 **`messages` + `values`**，在 **`values` 里检测 `__interrupt__`** 后 **`Command(resume={"decisions": ...})`** 闭环；CLI 用 **questionary** + **5s 超时默认同意**。 |
+| `03_langgraph_cache_demo.py` | **`compile(cache=InMemoryCache())`**；仅 **`expensive` 节点**带 **`cache_policy=CachePolicy(ttl=...)`**，**`plain` 节点**无 policy → 演示「只缓存指定节点」；用计数器观察命中（详见 §15）。 |
 
 ---
 
@@ -209,6 +210,46 @@
 ### 14.5 文件中未接入的片段
 
 - `tool_call_limit_middleware` 在文件内**已定义**但未加入 **`create_agent(..., middleware=[...])`** 列表；若要实验，需自行塞进列表并注意与 HITL、摘要的交互顺序。
+
+---
+
+## 15. LangGraph 节点 Cache（`compile(cache=...)` + `CachePolicy`）
+
+### 15.1 是什么、和 Checkpointer 的区别
+
+- **`compile(cache=BaseCache)`**（如 **`InMemoryCache()`**）为整图挂载**缓存存储**；真正是否读写缓存取决于**每个节点是否配置了 `CachePolicy`**（见 `pregel/_algo.py` 里构造任务时的 `cache_policy = proc.cache_policy or 图级默认`）。
+- **缓存内容**：节点执行产生的 **`writes`**（写入 channel 的更新），不是整条会话 state。
+- **Checkpointer**：按 **`thread_id`** 保存**可恢复的执行快照**（对话续跑、`interrupt`）。**Cache**：按**节点输入键**复用**同一份 writes**，用于**省算力**；**不是**会话记忆，二者**正交**。
+
+### 15.2 如何「只让指定节点用 cache」
+
+1. `graph = builder.compile(cache=InMemoryCache())`。
+2. 仅对需要缓存的节点：`add_node("name", fn, cache_policy=CachePolicy(ttl=3600))`（`ttl` 为秒，`None` 表示不过期，见 `langgraph.types.CachePolicy`）。
+3. **不要**在不需要全局默认时设置「图级」默认 `cache_policy`（若 API 支持且误设，可能让所有节点都带上策略）；**未配置 `cache_policy` 的节点**不会产生 `cache_key`，**不会**使用 cache。
+
+### 15.3 缓存键与 `thread_id`
+
+- 默认 **`key_func`** 对**节点输入 `val`** 序列化后哈希（见 `langgraph/_internal/_cache.py` 的 `default_cache_key`）。
+- **Cache 的 namespace 通常不含 `thread_id`**：不同用户、不同 `thread_id`，只要**传给该节点的输入 `val` 完全一致**，仍可能**命中同一条缓存**（跨会话复用 writes）。若业务上要按用户/会话隔离，需在**自定义 `key_func`** 中显式混入 `thread_id` / `user_id`（从 state 或 `config` 取）。
+
+### 15.4 大模型节点是否适合 cache
+
+- **temperature > 0** 或希望「同句多次改写不同」时，**不适合**：缓存会把某一次输出**固定**下来，失去随机性，也可能锁住一次较差结果。
+- 仅当业务明确要 **确定性**（如 `temperature=0`、固定 prompt 版本）且接受「同输入永远同输出」时，才可考虑；升级模型后宜 **`clear_cache`** 或换 key。
+
+### 15.5 清空缓存
+
+- 编译图实例上：**`graph.clear_cache()`** / **`await graph.aclear_cache()`**（无节点参数时通常清空全部，具体以当前版本文档为准）。
+
+### 15.6 可运行示例
+
+- 见本目录 **`03_langgraph_cache_demo.py`**：`expensive` 带 **`CachePolicy`**，`plain` 不带；两次 **`invoke`** 相同输入、不同 **`thread_id`** 时，`expensive` 内计数器不增加、`plain` 仍增加；**`clear_cache()`** 后 `expensive` 会再执行。
+
+运行：
+
+```text
+.venv\Scripts\python.exe practice\langgraph\03_langgraph_cache_demo.py
+```
 
 ---
 
