@@ -1,6 +1,6 @@
 # LangGraph 与 LangChain Agent 学习笔记
 
-> 便于复习：图编排、`create_agent`、中间件、记忆与存储、编译/调用参数、interrupt 等概念梳理。  
+> 便于复习：图编排、`create_agent`、中间件、记忆与存储、编译/调用参数、`interrupt`、**HumanInTheLoop** 与节点内 `interrupt` 对比、demo 对照说明。  
 > 环境参考：`langchain` 1.2.x、`langgraph` 1.x、`deepagents`（可选）。
 
 ---
@@ -131,11 +131,27 @@
 
 ---
 
+## 9.1 `HumanInTheLoopMiddleware` 与节点里直接 `interrupt()` 的差别
+
+二者**底层**都可以落到 LangGraph 的 **`interrupt()` + checkpointer + `Command(resume=...)`**，差别在**谁封装、payload 长什么样**。
+
+| 维度 | **手写节点里 `interrupt(value)`** | **`HumanInTheLoopMiddleware`** |
+|------|-----------------------------------|--------------------------------|
+| **定位** | 图原语，任意业务步骤可停 | 专门服务「模型已发出 **tool_calls**，人在工具真正执行前审批」 |
+| **触发点** | 你在节点代码里任意位置调用 | 框架在 **`after_model`**：上一轮 AI 已带 `tool_calls` 时，按 `interrupt_on` 筛要审的工具 |
+| **传出载荷** | 自定义 `value`（字符串、dict 均可） | 固定为 **`HITLRequest`**：`action_requests`、`review_configs`（见 `langchain` 源码 `human_in_the_loop.py`） |
+| **恢复协议** | 自己约定 `resume` 含义并在节点里读完继续写逻辑 | 约定 **`Command(resume={"decisions": [...]})`**，每条 decision 对应一条待审的 tool call（`approve` / `edit` / `reject`，需与 `InterruptOnConfig.allowed_decisions` 一致） |
+| **恢复后** | 自己改 state | 中间件根据 decisions **改写 AIMessage.tool_calls**、必要时注入 **ToolMessage**（如 reject） |
+
+**怎么选**：只做「工具调用前同意/拒绝/改参」→ 用中间件省事；要做「与 tool_calls 无关的人工步骤」（审计划、填表单、多段输入）→ 在自定义节点里 `interrupt()` 更直接。
+
+---
+
 ## 10. `SummarizationMiddleware` 如何确认「是否执行」
 
 - 框架**无**专门 info 日志；靠 **触发条件**与**状态特征**判断。
 - 触发：`trigger` 多条件一般为 **OR**（如 `messages ≥ N` 或 `tokens ≥ M`）；**同一 `thread_id` 才会累加历史**。
-- 执行后消息中会出现 **`HumanMessage`**，正文以 **`Here is a summary of the conversation to date:`** 开头，`additional_kwargs` 常含 **`lc_source": "summarization"`**。
+- 执行后消息中会出现 **`HumanMessage`**，正文以 **`Here is a summary of the conversation to date:`** 开头，`additional_kwargs` 常含 **`"lc_source": "summarization"`**。
 - 调试：`create_agent(..., debug=True)`、`stream_mode="updates"`、临时降低 `trigger` 门槛、在 `@after_model` 里看条数骤降。
 
 ---
@@ -156,10 +172,43 @@
 
 ---
 
-## 13. 本目录 demo 索引（可选）
+## 13. 本目录 demo 索引
 
-- `01_langgraph_demo.py`：`ReportAgentState` 工作流、`interrupt` + `Command(resume)`、Checkpointer。  
-- `02_langgraph_demo.py`：`create_agent`、`SummarizationMiddleware`、装饰器中间件等实验。
+| 文件 | 内容概要 |
+|------|----------|
+| `01_langgraph_demo.py` | 手写 `StateGraph` / `ReportAgentState` 工作流、节点内 **`interrupt`** + **`Command(resume)`**、**Checkpointer** 与 `thread_id`。 |
+| `02_langgraph_demo.py` | **`create_agent`**、`SummarizationMiddleware`、**`@after_model`** / **`@wrap_tool_call`（async）**、**`HumanInTheLoopMiddleware`**；用 **`astream`** 消费 **`messages` + `values`**，在 **`values` 里检测 `__interrupt__`** 后 **`Command(resume={"decisions": ...})`** 闭环；CLI 用 **questionary** + **5s 超时默认同意**。 |
+
+---
+
+## 14. `02_langgraph_demo.py` 学习要点（对照源码）
+
+### 14.1 配置与依赖
+
+- **`checkpointer`**（如 `InMemorySaver`）+ **`RunnableConfig(configurable={"thread_id": ...})`**：`HumanInTheLoopMiddleware` **必须**能按线程持久化，否则无法挂起/恢复。
+- **`interrupt_on`**：`dict[工具名, True | False | InterruptOnConfig]`。`InterruptOnConfig` 可设 **`allowed_decisions`**（与恢复时 `decisions[].type` 对齐）、**`description`**（会写入每条 **`ActionRequest.description`**，便于 UI/日志展示）。
+- **`@wrap_tool_call` 写成 `async def` 且 `await handler(request)`**：在 **`astream` / `ainvoke`** 异步路径下，`handler` 对应异步执行，不 `await` 会得到 coroutine 未 awaited 类错误（见上文 §3）。
+
+### 14.2 为何用 `astream` 的 `values` 模式盯 `__interrupt__`
+
+- 流式输出模型 token 时用 **`stream_mode` 含 `"messages"`**。
+- 暂停时，整图状态快照里会出现 **`__interrupt__`**（`Interrupt` 对象元组等），用 **`"values"`**（或兼容的 values 聚合）才能在 chunk 里**及时**看到，便于打断 `async for` 去做人工输入。
+- 解析时：**遍历每个 `Interrupt`**，再遍历 **`value["action_requests"]`**，不要只取 `[0]`；**`decisions` 条数**必须与 **待审批 tool call 条数**一致，否则中间件会报错。
+
+### 14.3 恢复调用形状
+
+- 首次：`{"messages": [HumanMessage(...)]}`。
+- 中断后：`Command(resume={"decisions": [{"type": "approve"} | {"type": "reject", "message": "..."} | ...]})`。
+- 若一轮里有多条待审批，应对 **`prompts` 列表逐条**收集 decision，再 **一次性** `resume`（demo 里对 `prompts` 循环 `await _prompt_hitl_decision_async` 再组 `decisions`）。
+
+### 14.4 CLI：questionary 与超时
+
+- 使用 **`await questionary.select(...).ask_async()`**，外层 **`asyncio.wait_for(..., timeout=5)`**，超时则默认 **`{"type": "approve"}`**（可按产品改为拒绝）。
+- 超时取消底层 prompt 后，终端偶发残留 TUI 属 prompt_toolkit 常见现象，生产环境可换 Web UI 或纯 HTTP 审批。
+
+### 14.5 文件中未接入的片段
+
+- `tool_call_limit_middleware` 在文件内**已定义**但未加入 **`create_agent(..., middleware=[...])`** 列表；若要实验，需自行塞进列表并注意与 HITL、摘要的交互顺序。
 
 ---
 
