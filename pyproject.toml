@@ -39,4 +39,6 @@ dependencies = [
     "uapi-sdk-python>=0.1.10",
     "mem0ai>=1.0.9",
     "questionary>=2.1.1",
+    "langfuse>=4.0.6",
+    "snowflake-id>=1.0.2",
 ]
