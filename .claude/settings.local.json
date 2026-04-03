@@ -16,7 +16,9 @@
       "Bash(findstr :9002)",
       "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 9001 -ErrorAction SilentlyContinue | Select-Object OwningProcess\")",
       "Bash(powershell -Command \"Stop-Process -Id 21012 -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2; Get-NetTCPConnection -LocalPort 9001 -ErrorAction SilentlyContinue\")",
-      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 10001,10002 -ErrorAction SilentlyContinue | Select-Object LocalPort, State\")"
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 10001,10002 -ErrorAction SilentlyContinue | Select-Object LocalPort, State\")",
+      "WebFetch(domain:python.langchain.com)",
+      "WebFetch(domain:langchain-ai.github.io)"
     ]
   }
 }

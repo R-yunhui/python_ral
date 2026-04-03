@@ -74,7 +74,6 @@ def main() -> None:
 
     print("--- clear_cache 后再 invoke，expensive 会再跑一遍 ---")
     graph.clear_cache()
-    expensive_runs = plain_runs = 0
     out3 = graph.invoke(inp, cfg_a)
     print("out:", out3)
     print(f"expensive_runs={expensive_runs}, plain_runs={plain_runs}")
