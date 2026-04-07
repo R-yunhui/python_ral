@@ -18,7 +18,28 @@
       "Bash(powershell -Command \"Stop-Process -Id 21012 -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2; Get-NetTCPConnection -LocalPort 9001 -ErrorAction SilentlyContinue\")",
       "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 10001,10002 -ErrorAction SilentlyContinue | Select-Object LocalPort, State\")",
       "WebFetch(domain:python.langchain.com)",
-      "WebFetch(domain:langchain-ai.github.io)"
+      "WebFetch(domain:langchain-ai.github.io)",
+      "Bash(python:*)",
+      "Bash(uv run:*)",
+      "Bash(uv tool:*)",
+      "Bash(uv add:*)",
+      "Bash(uvx --from pnpm pnpm install)",
+      "Bash(uv sync:*)",
+      "Bash(git reset:*)",
+      "Bash(rm -rf expense_app/**/__pycache__)",
+      "Bash(git add:*)",
+      "Bash(curl:*)",
+      "Bash(find /d/renyunhui/study/python_workspace/python_ral/.worktrees/expense-module -name \"*.pyc\" -delete)",
+      "Bash(find /d/renyunhui/study/python_workspace/python_ral/.worktrees/expense-module -name \"__pycache__\" -type d -exec rm -rf {} +)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(powershell:*)",
+      "Bash(git checkout:*)",
+      "Bash(git commit:*)",
+      "Bash(git rm:*)",
+      "Bash(npm run:*)",
+      "Bash(git merge:*)",
+      "Bash(git branch:*)",
+      "Bash(git worktree:*)"
     ]
   }
 }
