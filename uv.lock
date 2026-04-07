@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -2161,6 +2161,20 @@ wheels = [
 ]
 
 [[package]]
+name = "nodejs-bin"
+version = "18.4.0a4"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/a9/c679333eb93df04d5d8d005edaeb77013c2b851b30fe30af6f8743c56be4/nodejs_bin-18.4.0a4-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:16cb1abf7fe8c11c574e1e474d9f934a0df49a480290eae6e733d8bb09512e22", size = 44913825, upload-time = "2022-07-06T22:12:13.636Z" },
+    { url = "https://files.pythonhosted.org/packages/36/21/7bb412b4418385e3d572311b567bfeac3009a24df2e097c1c1c427404a19/nodejs_bin-18.4.0a4-py3-none-macosx_11_0_arm64.whl", hash = "sha256:068ca987ed83ea1123775fafe5dc22d8f2ff920d7d31571e1bfe6fb1093833eb", size = 43294781, upload-time = "2022-07-06T22:12:44.605Z" },
+    { url = "https://files.pythonhosted.org/packages/14/f5/b85f10ddb2b6bf58395bd08a7794ded91518f7eca1dc771c22c808c44e81/nodejs_bin-18.4.0a4-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.whl", hash = "sha256:06cfeaa4d26eec94d8edb9927525ce94eb96dadc81f7d1daed42d1a7d003a4c9", size = 47303948, upload-time = "2022-07-06T22:13:22.033Z" },
+    { url = "https://files.pythonhosted.org/packages/df/66/3a8ae9dde45b2181d9dbfc33dedbefc8c530fb833d90410efb28179af7a5/nodejs_bin-18.4.0a4-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:431ee3529f4fb226ddcfd4f14cb37e7df31238c42dfd051f4bf8f0c21029b133", size = 47142342, upload-time = "2022-07-06T22:13:53.799Z" },
+    { url = "https://files.pythonhosted.org/packages/20/04/045acf6f5a051f8088619728f822dcbf2af47cfc01ccadf57db672cd547e/nodejs_bin-18.4.0a4-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:21f1f77ddc8fe05353bb6d6ee8e5a62edb3a8dcdb2740a5f9307fd8d9eef6691", size = 44112196, upload-time = "2022-07-06T22:14:30.475Z" },
+    { url = "https://files.pythonhosted.org/packages/36/7c/9873a1a5d64179513240380474086bc69de72ef3ac27aa00210961d4742b/nodejs_bin-18.4.0a4-py3-none-win32.whl", hash = "sha256:59671fdc563dabb8be8a0b6dae4169d780482b3c9e0fba3f9aa2b7ee8d2261ac", size = 27509663, upload-time = "2022-07-06T22:14:52.882Z" },
+    { url = "https://files.pythonhosted.org/packages/77/fc/cb203ae648ce1c14954f4752601fb0bf2dd2f627e0e62e4e7aa68b1dc9ac/nodejs_bin-18.4.0a4-py3-none-win_amd64.whl", hash = "sha256:cbd509218b4b17f75ee7841f9c21d5cacc1626d3b823a652a6627dbad18228ec", size = 29356349, upload-time = "2022-07-06T22:15:14.233Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3086,7 +3100,9 @@ dependencies = [
     { name = "llama-index-llms-langchain" },
     { name = "llama-index-vector-stores-qdrant" },
     { name = "mem0ai" },
+    { name = "nodejs-bin" },
     { name = "passlib", extra = ["bcrypt"] },
+    { name = "pydantic" },
     { name = "pymysql" },
     { name = "pypdf" },
     { name = "python-docx" },
@@ -3126,7 +3142,9 @@ requires-dist = [
     { name = "llama-index-llms-langchain", specifier = ">=0.7.2" },
     { name = "llama-index-vector-stores-qdrant", specifier = ">=0.9.1" },
     { name = "mem0ai", specifier = ">=1.0.9" },
+    { name = "nodejs-bin", specifier = ">=18.4.0a4" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
+    { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pymysql", specifier = ">=1.1.0" },
     { name = "pypdf", specifier = ">=3.0.0" },
     { name = "python-docx", specifier = ">=1.0.0" },

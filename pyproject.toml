@@ -41,4 +41,6 @@ dependencies = [
     "questionary>=2.1.1",
     "langfuse>=4.0.6",
     "snowflake-id>=1.0.2",
+    "pydantic>=2.12.5",
+    "nodejs-bin>=18.4.0a4",
 ]
