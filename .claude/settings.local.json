@@ -39,7 +39,14 @@
       "Bash(npm run:*)",
       "Bash(git merge:*)",
       "Bash(git branch:*)",
-      "Bash(git worktree:*)"
+      "Bash(git worktree:*)",
+      "WebFetch(domain:cloud.tencent.com)",
+      "WebFetch(domain:juejin.cn)",
+      "Bash(npm list:*)",
+      "Bash(cc-connect weixin:*)",
+      "Bash(cc-connect daemon:*)",
+      "Bash(taskkill /F /IM cc-connect.exe)",
+      "Bash(cc-connect:*)"
     ]
   }
 }

@@ -1,0 +1,35 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[oc]
+.venv/
+*.egg-info/
+build/
+dist/
+wheels/
+
+# IDE
+.cursor/
+.idea/
+.vscode/
+
+# 敏感/本地配置（通过 docker compose env_file 挂载，不打进镜像）
+.env
+.env.*
+
+# 数据与日志（运行时挂载或由容器内生成）
+bisheng_generator/data/
+rag/data/
+rag/qdrant_storage/
+rag_data/
+log/
+output/
+*.db
+temp/
+
+# 文档与无关文件
+*.md
+!README.md
