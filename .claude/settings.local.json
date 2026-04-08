@@ -46,7 +46,18 @@
       "Bash(cc-connect weixin:*)",
       "Bash(cc-connect daemon:*)",
       "Bash(taskkill /F /IM cc-connect.exe)",
-      "Bash(cc-connect:*)"
+      "Bash(cc-connect:*)",
+      "Bash(wslpath \"C:\\\\Users\\\\Admin\\\\Desktop\\\\项目文档\\\\video-agent\\\\Video-Agent 架构设计文档.md\")",
+      "Bash(pwsh -Command \"Get-Content -Path 'C:\\\\Users\\\\Admin\\\\Desktop\\\\项目文档\\\\video-agent\\\\Video-Agent 架构设计文档.md' -Raw -Encoding UTF8\")",
+      "Bash(powershell.exe -Command \"Get-Content -Path 'C:\\\\Users\\\\Admin\\\\Desktop\\\\项目文档\\\\video-agent\\\\Video-Agent 架构设计文档.md' -Raw\")",
+      "Bash(dir C:\\\\Users\\\\Admin\\\\Desktop\\\\项目文档\\\\video-agent:*)",
+      "Bash(find . -name \"*.md\" -exec ls -la {} \\\\;)",
+      "Bash(find . -name \"Video-Agent 架构*.md\" -exec cat {} \\\\;)",
+      "Bash(robocopy C:\\\\Users\\\\Admin\\\\Desktop\\\\项目文档\\\\video-agent:*)",
+      "Bash(cmd.exe /c chcp 65001)",
+      "Bash(dir \"C:\\\\Users\\\\Admin\\\\Desktop\\\\项目文档\\\\video-agent\" /b)",
+      "Bash(where cc-connect:*)",
+      "WebFetch(domain:www.weather.com.cn)"
     ]
   }
 }
