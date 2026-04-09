@@ -57,7 +57,9 @@
       "Bash(cmd.exe /c chcp 65001)",
       "Bash(dir \"C:\\\\Users\\\\Admin\\\\Desktop\\\\项目文档\\\\video-agent\" /b)",
       "Bash(where cc-connect:*)",
-      "WebFetch(domain:www.weather.com.cn)"
+      "WebFetch(domain:www.weather.com.cn)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs"
     ]
   }
 }
