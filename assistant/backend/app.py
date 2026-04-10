@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlmodel import SQLModel, create_engine
 from sqlalchemy import text
-from assistant.backend.api.chat import router as chat_router
+from assistant.backend.api.chat import router as chat_router, init_graph
 from assistant.backend.api.health import register_health
 from assistant.backend.middleware.auth import set_api_key
 
@@ -41,6 +41,18 @@ def create_app(settings=None, test_mode: bool = False) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # 启动 LangGraph
+        from assistant.backend.graph.chat_graph import ChatGraph
+        from assistant.backend.service.llm_client import LLMClient
+
+        graph = ChatGraph(
+            settings=settings,
+            engine=engine,
+            llm_client_intent=LLMClient(settings.intent_model, settings.intent_api_key, settings.intent_base_url),
+            llm_client_reply=LLMClient(settings.reply_model, settings.reply_api_key, settings.reply_base_url),
+        )
+        graph.start_background_worker()
+        init_graph(graph)
         yield
 
     app = FastAPI(lifespan=lifespan)

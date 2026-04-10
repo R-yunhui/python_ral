@@ -1,4 +1,4 @@
-from assistant.backend.graph.chat_graph import GraphState
+from typing import Any
 
 
 class ReplyService:
@@ -10,12 +10,12 @@ class ReplyService:
         "mixed": "已记录 {amount} 元 {category}。本月该类别共支出 {total} 元。",
     }
 
-    def build_reply(self, state: GraphState) -> str:
+    def build_reply(self, state: dict[str, Any]) -> str:
         if state.get("answer"):
             return state["answer"]
         return self._build_fallback(state)
 
-    def _build_fallback(self, state: GraphState) -> str:
+    def _build_fallback(self, state: dict[str, Any]) -> str:
         """兜底：模板拼接回复"""
         plan = state.get("plan")
         if plan and plan.query_intent and plan.store_intents:
