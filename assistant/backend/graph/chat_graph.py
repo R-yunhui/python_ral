@@ -1,8 +1,8 @@
 import asyncio
 import logging
+from typing import TypedDict, Optional, Any
 from uuid import uuid4
 
-from assistant.backend.graph.chat_graph import GraphState
 from assistant.backend.model.schemas import LLMPlan
 from assistant.backend.service.background_jobs import StoreJob, enqueue_store, store_worker
 from assistant.backend.service.llm_orchestrator_service import plan_from_message
@@ -12,6 +12,17 @@ from assistant.backend.service.reply_service import ReplyService
 from assistant.backend.service.short_memory_service import ShortMemoryService
 from assistant.backend.service.structured_store_service import StructuredStoreService
 from assistant.backend.utils.logging import trace_id_var
+
+
+class GraphState(TypedDict):
+    user_id: str
+    message: str
+    trace_id: str
+    plan: Optional[LLMPlan]
+    query_results: list[dict]
+    long_memory_results: list[dict]
+    answer: str
+    errors: list[str]
 
 logger = logging.getLogger(__name__)
 
