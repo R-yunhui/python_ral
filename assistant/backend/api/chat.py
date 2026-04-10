@@ -16,7 +16,5 @@ def init_graph(graph):
 async def chat(req: ChatRequest, _auth: str = Depends(check_auth)) -> ChatResponse:
     if _graph is None:
         return ChatResponse(answer="服务初始化中，请稍后再试。", trace_id="init_pending")
-    import asyncio
-    loop = asyncio.get_event_loop()
-    result = loop.run_until_complete(_graph.process(req.user_id, req.message))
+    result = await _graph.process(req.user_id, req.message)
     return ChatResponse(answer=result["answer"], trace_id=result["trace_id"])

@@ -2,9 +2,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlmodel import SQLModel, create_engine
 from sqlalchemy import text
-from assistant.backend.api.chat import router as chat_router, init_graph
+from assistant.backend.model.sql_models import init_db, seed_categories
 from assistant.backend.api.health import register_health
 from assistant.backend.middleware.auth import set_api_key
+
+from assistant.backend.api.chat import router as chat_router, init_graph
+
 
 def create_app(settings=None, test_mode: bool = False) -> FastAPI:
     """FastAPI 工厂函数"""
@@ -32,25 +35,23 @@ def create_app(settings=None, test_mode: bool = False) -> FastAPI:
         pool_pre_ping=True,
     )
 
-    # 启用 WAL 模式 + 写入超时
+    # 初始化数据库（建表 + 种子数据）
     with engine.connect() as conn:
         conn.execute(text("PRAGMA journal_mode=WAL"))
         conn.execute(text("PRAGMA busy_timeout=5000"))
-
     SQLModel.metadata.create_all(engine)
+    seed_categories(engine)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # 启动 LangGraph
         from assistant.backend.graph.chat_graph import ChatGraph
-        from assistant.backend.service.llm_client import LLMClient
 
         graph = ChatGraph(
             settings=settings,
             engine=engine,
-            llm_client_intent=LLMClient(settings.intent_model, settings.intent_api_key, settings.intent_base_url),
-            llm_client_reply=LLMClient(settings.reply_model, settings.reply_api_key, settings.reply_base_url),
         )
+        graph.init_llm_clients()
         graph.start_background_worker()
         init_graph(graph)
         yield

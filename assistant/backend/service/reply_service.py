@@ -21,7 +21,7 @@ class ReplyService:
         if plan and plan.query_intent and plan.store_intents:
             # 混合意图
             store = plan.store_intents[0]
-            data = store.get("data", {})
+            data = store.get("data", store)  # 支持直接读取 store dict
             return self.FALLBACK_TEMPLATES["mixed"].format(
                 amount=data.get("amount", "未知"),
                 category=data.get("category", "未分类"),
@@ -29,10 +29,14 @@ class ReplyService:
             )
         elif plan and plan.store_intents:
             store = plan.store_intents[0]
-            data = store.get("data", {})
+            data = store.get("data", store)  # 支持直接读取 store dict
             return self.FALLBACK_TEMPLATES["expense_record"].format(
                 amount=data.get("amount", "未知"),
                 category=data.get("category", "未分类"),
                 description=data.get("description", ""),
             )
+        elif plan and plan.query_intent:
+            qr = state.get("query_results", [])
+            if qr:
+                return f"{qr[0].get('category', '')} 共支出 {qr[0].get('total', 0)} 元。"
         return "好的，我已收到你的消息。"

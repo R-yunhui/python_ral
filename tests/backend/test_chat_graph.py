@@ -1,11 +1,8 @@
-"""LangGraph 端到端集成测试"""
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock
 from sqlmodel import create_engine
 from assistant.backend.config.settings import Settings
-from assistant.backend.app import create_app
-from assistant.backend.graph.chat_graph import ChatGraph, GraphState
+from assistant.backend.graph.chat_graph import ChatGraph
 from assistant.backend.model.sql_models import init_db
 
 
@@ -22,12 +19,11 @@ def _make_graph(engine):
     mock_intent.invoke.return_value = '{"store_intents": [{"type": "structured", "data": {"amount": 30, "category": "餐饮", "description": "午餐"}}], "query_intent": null, "reply_strategy": "concise_cn"}'
 
     mock_reply = AsyncMock()
-    return ChatGraph(
-        settings=Settings(reply_api_key="test", sqlite_path=":memory:", api_key="test-key"),
-        engine=engine,
-        llm_client_intent=mock_intent,
-        llm_client_reply=mock_reply,
-    )
+    s = Settings(reply_api_key="test", sqlite_path=":memory:", api_key="test-key")
+    graph = ChatGraph(settings=s, engine=engine)
+    graph._llm_intent = mock_intent
+    graph._llm_reply = mock_reply
+    return graph
 
 
 @pytest.mark.asyncio
@@ -46,13 +42,11 @@ async def test_process_mixed_intent(engine):
     mock_intent.invoke.return_value = '{"store_intents": [{"type": "structured", "data": {"amount": 30, "category": "餐饮"}}], "query_intent": {"type": "structured", "params": {"category": "餐饮", "date_range": "这个月"}}, "reply_strategy": "concise_cn"}'
     mock_reply = AsyncMock()
 
-    from assistant.backend.config.settings import Settings
-    graph = ChatGraph(
-        settings=Settings(reply_api_key="test", sqlite_path=":memory:", api_key="test-key"),
-        engine=engine,
-        llm_client_intent=mock_intent,
-        llm_client_reply=mock_reply,
-    )
+    s = Settings(reply_api_key="test", sqlite_path=":memory:", api_key="test-key")
+    graph = ChatGraph(settings=s, engine=engine)
+    graph._llm_intent = mock_intent
+    graph._llm_reply = mock_reply
+
     result = await graph.process("u1", "午饭30块，帮我看看这个月餐饮花了多少")
     assert "answer" in result
     assert "trace_id" in result

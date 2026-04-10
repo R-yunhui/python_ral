@@ -87,26 +87,29 @@ def init_db(engine):
 
 
 def seed_categories(engine):
-    """写入初始分类字典（需求文档 10.2 节）"""
-    from sqlmodel import Session
-    categories = [
-        Category(code="餐饮", name="餐饮", direction="expense", level=1),
-        Category(code="交通", name="交通", direction="expense", level=1),
-        Category(code="居住", name="居住", direction="expense", level=1),
-        Category(code="购物", name="购物", direction="expense", level=1),
-        Category(code="娱乐", name="娱乐", direction="expense", level=1),
-        Category(code="医疗", name="医疗", direction="expense", level=1),
-        Category(code="教育", name="教育", direction="expense", level=1),
-        Category(code="通讯", name="通讯", direction="expense", level=1),
-        Category(code="其他支出", name="其他", direction="expense", level=1),
-        Category(code="工资", name="工资", direction="income", level=1),
-        Category(code="奖金", name="奖金", direction="income", level=1),
-        Category(code="报销", name="报销", direction="income", level=1),
-        Category(code="理财", name="理财", direction="income", level=1),
-        Category(code="转账", name="转账", direction="income", level=1),
-        Category(code="退款", name="退款", direction="income", level=1),
-        Category(code="其他收入", name="其他", direction="income", level=1),
-    ]
+    """写入初始分类字典（需求文档 10.2 节）— 幂等"""
+    from sqlmodel import Session, select
     with Session(engine) as session:
+        existing = session.exec(select(Category).where(Category.level == 1)).first()
+        if existing:
+            return  # 已存在，跳过
+        categories = [
+            Category(code="餐饮", name="餐饮", direction="expense", level=1),
+            Category(code="交通", name="交通", direction="expense", level=1),
+            Category(code="居住", name="居住", direction="expense", level=1),
+            Category(code="购物", name="购物", direction="expense", level=1),
+            Category(code="娱乐", name="娱乐", direction="expense", level=1),
+            Category(code="医疗", name="医疗", direction="expense", level=1),
+            Category(code="教育", name="教育", direction="expense", level=1),
+            Category(code="通讯", name="通讯", direction="expense", level=1),
+            Category(code="其他支出", name="其他", direction="expense", level=1),
+            Category(code="工资", name="工资", direction="income", level=1),
+            Category(code="奖金", name="奖金", direction="income", level=1),
+            Category(code="报销", name="报销", direction="income", level=1),
+            Category(code="理财", name="理财", direction="income", level=1),
+            Category(code="转账", name="转账", direction="income", level=1),
+            Category(code="退款", name="退款", direction="income", level=1),
+            Category(code="其他收入", name="其他", direction="income", level=1),
+        ]
         session.add_all(categories)
         session.commit()

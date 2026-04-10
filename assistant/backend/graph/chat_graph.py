@@ -13,6 +13,8 @@ from assistant.backend.service.short_memory_service import ShortMemoryService
 from assistant.backend.service.structured_store_service import StructuredStoreService
 from assistant.backend.utils.logging import trace_id_var
 
+logger = logging.getLogger(__name__)
+
 
 class GraphState(TypedDict):
     user_id: str
@@ -24,13 +26,12 @@ class GraphState(TypedDict):
     answer: str
     errors: list[str]
 
-logger = logging.getLogger(__name__)
-
 
 class ChatGraph:
     """LangGraph 主流程编排"""
 
-    def __init__(self, settings, engine, llm_client_intent, llm_client_reply):
+    def __init__(self, settings, engine):
+        self._settings = settings
         self._engine = engine
         self._store_service = StructuredStoreService(engine)
         self._query_service = QueryService(engine)
@@ -38,9 +39,23 @@ class ChatGraph:
         self._mem0_service = LongMemoryService(settings.mem0_api_key)
         self._reply_service = ReplyService()
         self._short_memory: dict[str, ShortMemoryService] = {}
-        self._llm_intent = llm_client_intent
-        self._llm_reply = llm_client_reply
+        self._llm_intent = None
+        self._llm_reply = None
         self._background_task: asyncio.Task | None = None
+
+    def init_llm_clients(self):
+        """懒加载 LLM 客户端（避免阻塞启动）"""
+        from assistant.backend.service.llm_client import LLMClient
+        self._llm_intent = LLMClient(
+            self._settings.intent_model,
+            self._settings.intent_api_key,
+            self._settings.intent_base_url,
+        )
+        self._llm_reply = LLMClient(
+            self._settings.reply_model,
+            self._settings.reply_api_key,
+            self._settings.reply_base_url,
+        )
 
     def start_background_worker(self):
         """启动后台存储消费协程"""
@@ -115,7 +130,6 @@ class ChatGraph:
         try:
             query = plan.query_intent
             params = query.get("params", {})
-            # 简单查询：按类别+时间范围汇总
             if "category" in params:
                 from assistant.backend.utils.time_range import parse_date_range
                 date_range = params.get("date_range", "今天")
