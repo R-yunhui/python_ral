@@ -59,13 +59,19 @@ function App() {
   return (
     <div className="min-h-screen flex flex-col">
       <Header messageCount={messages.length} onClear={clearHistory} />
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
-        <ChatPanel
-          messages={messages}
-          loading={loading}
-          onSend={handleSend}
-        />
-        <SummaryPanel messages={messages} />
+      <main className="flex-1 max-w-[1200px] w-full mx-auto px-6 py-6">
+        <div className="flex flex-col lg:flex-row gap-6 items-start" style={{ height: 'calc(100vh - 56px - 3rem)' }}>
+          <div className="flex-1 min-w-0 min-h-0 w-full">
+            <ChatPanel
+              messages={messages}
+              loading={loading}
+              onSend={handleSend}
+            />
+          </div>
+          <aside className="w-full lg:w-[280px] shrink-0 min-h-0">
+            <SummaryPanel messages={messages} />
+          </aside>
+        </div>
       </main>
     </div>
   )

@@ -59,7 +59,27 @@
       "Bash(where cc-connect:*)",
       "WebFetch(domain:www.weather.com.cn)",
       "mcp__plugin_context7_context7__resolve-library-id",
-      "mcp__plugin_context7_context7__query-docs"
+      "mcp__plugin_context7_context7__query-docs",
+      "mcp__plugin_github_github__search_repositories",
+      "mcp__plugin_github_github__get_file_contents",
+      "WebFetch(domain:api.github.com)",
+      "Bash(uv pip:*)",
+      "Bash(cat .cursor/rules/*.mdc)",
+      "Bash(cat .cursorrules)",
+      "Bash(npx --version)",
+      "Bash(npx vite:*)",
+      "Bash(node \"C:/Users/Admin/.claude/plugins/cache/openai-codex/codex/1.0.2/scripts/codex-companion.mjs\" review --wait)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx playwright:*)",
+      "Bash(node -e ':*)",
+      "mcp__plugin_playwright_playwright__browser_run_code",
+      "Bash(node \"C:/Users/Admin/.claude/plugins/cache/openai-codex/codex/1.0.2/scripts/codex-companion.mjs\" review)",
+      "Bash(lsof -ti:5173)",
+      "Bash(xargs kill:*)",
+      "Bash(pkill -f vite)",
+      "Bash(pkill -f node)",
+      "Bash(fuser -k 5173/tcp 5174/tcp 5175/tcp)"
     ]
   }
 }

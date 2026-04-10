@@ -12,6 +12,7 @@
 | [redis](./redis/) | Redis（类型、持久化、集群、缓存、锁、场景 + **面经补充**） |
 | [spring](./spring/) | Spring / Spring Boot / Spring Cloud（IoC、AOP、事务、自动配置、微服务组件、网关容错、可观测性 + **面经补充**） |
 | [distributed-transaction](./distributed-transaction/) | 分布式事务（2PC/XA、TCC、Saga、事务消息、Seata、幂等对账、场景 + **面经补充**） |
+| [python-llm](./python-llm/) | Python 大模型应用（LLM 基础、Prompt、LangChain Chain/Agent、RAG、向量检索、流式异步、成本优化、安全场景 + **面经补充**） |
 
 ### 官方文档速查（复习查证用）
 
