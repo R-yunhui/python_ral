@@ -79,7 +79,8 @@
       "Bash(xargs kill:*)",
       "Bash(pkill -f vite)",
       "Bash(pkill -f node)",
-      "Bash(fuser -k 5173/tcp 5174/tcp 5175/tcp)"
+      "Bash(fuser -k 5173/tcp 5174/tcp 5175/tcp)",
+      "WebFetch(domain:help.aliyun.com)"
     ]
   }
 }
