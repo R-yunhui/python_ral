@@ -44,6 +44,8 @@ dependencies = [
     "pydantic>=2.12.5",
     "pydantic-settings>=2.0.0",
     "nodejs-bin>=18.4.0a4",
+    "redis>=7.4.0",
+    "pottery>=3.0.1",
 ]
 
 [project.optional-dependencies]

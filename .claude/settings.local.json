@@ -80,7 +80,12 @@
       "Bash(pkill -f vite)",
       "Bash(pkill -f node)",
       "Bash(fuser -k 5173/tcp 5174/tcp 5175/tcp)",
-      "WebFetch(domain:help.aliyun.com)"
+      "WebFetch(domain:help.aliyun.com)",
+      "Bash(fuser -k 5173/tcp 5174/tcp 5175/tcp)",
+      "WebFetch(domain:weathercn.msn.com)",
+      "WebFetch(domain:www.msn.com)",
+      "WebFetch(domain:www.accuweather.com)",
+      "Bash(claude update:*)"
     ]
   }
 }
