@@ -3260,6 +3260,7 @@ dependencies = [
     { name = "snowflake-id" },
     { name = "sqlalchemy" },
     { name = "sqlmodel" },
+    { name = "tiktoken" },
     { name = "uapi-sdk-python" },
     { name = "uvicorn" },
 ]
@@ -3315,6 +3316,7 @@ requires-dist = [
     { name = "snowflake-id", specifier = ">=1.0.2" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "sqlmodel", specifier = ">=0.0.14" },
+    { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "uapi-sdk-python", specifier = ">=0.1.10" },
     { name = "uvicorn", specifier = ">=0.27.0" },
 ]

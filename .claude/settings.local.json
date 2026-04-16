@@ -85,7 +85,8 @@
       "WebFetch(domain:weathercn.msn.com)",
       "WebFetch(domain:www.msn.com)",
       "WebFetch(domain:www.accuweather.com)",
-      "Bash(claude update:*)"
+      "Bash(claude update:*)",
+      "Bash(pip show:*)"
     ]
   }
 }
