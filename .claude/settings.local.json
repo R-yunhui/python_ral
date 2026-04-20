@@ -81,6 +81,7 @@
       "Bash(pkill -f node)",
       "Bash(fuser -k 5173/tcp 5174/tcp 5175/tcp)",
       "WebFetch(domain:help.aliyun.com)",
+<<<<<<< HEAD
       "WebFetch(domain:tianqi.moji.com)",
       "WebFetch(domain:www.tianqi.com)",
       "mcp__tavily__tavily_search",
@@ -88,6 +89,14 @@
       "mcp__plugin_github_github__search_code",
       "mcp__firecrawl-mcp__firecrawl_scrape",
       "mcp__firecrawl-mcp__firecrawl_search"
+=======
+      "Bash(fuser -k 5173/tcp 5174/tcp 5175/tcp)",
+      "WebFetch(domain:weathercn.msn.com)",
+      "WebFetch(domain:www.msn.com)",
+      "WebFetch(domain:www.accuweather.com)",
+      "Bash(claude update:*)",
+      "Bash(pip show:*)"
+>>>>>>> 32ffd62d23598f9be6db625e558c9fc64a58bcfa
     ]
   }
 }
