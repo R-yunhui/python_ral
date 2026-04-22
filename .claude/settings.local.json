@@ -86,7 +86,17 @@
       "WebFetch(domain:www.msn.com)",
       "WebFetch(domain:www.accuweather.com)",
       "Bash(claude update:*)",
-      "Bash(pip show:*)"
+      "Bash(pip show:*)",
+      "mcp__tavily__tavily_search",
+      "mcp__context7__query-docs",
+      "mcp__context7__resolve-library-id",
+      "WebFetch(domain:hermes-agent.nousresearch.com)",
+      "WebFetch(domain:developer.aliyun.com)",
+      "WebFetch(domain:www.xmsumi.com)",
+      "Bash(wsl -l -v)",
+      "Bash(findstr 10010)",
+      "Bash(findstr LISTENING)",
+      "Bash(taskkill //F //PID 14476)"
     ]
   }
 }

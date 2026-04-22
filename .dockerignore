@@ -33,3 +33,4 @@ temp/
 # 文档与无关文件
 *.md
 !README.md
+*.pdf
