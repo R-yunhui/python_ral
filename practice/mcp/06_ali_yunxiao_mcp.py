@@ -42,7 +42,6 @@ async def awrap_tool_call_middleware(
     tool = request.tool
     print(f"awrap_tool_call_middleware 即将调用工具: {tool.name}")
     result = await handler(request)
-    print(f"awrap_tool_call_middleware 工具调用完成，返回结果: {result}")
     return result
 
 
@@ -98,7 +97,7 @@ agent = None
 
 REQUIREMENT_TEXT = (
     "我主要是为了查询我当前都有哪些项目，并且项目里面有哪些迭代，"
-    "还要查询相应的需求，以及需求下面的任务，并且可以新增、编辑、删除我自己的任务。"
+    "还要查询相应的需求，以及需求下面的任务，并且可以新增、编辑、删除我自己的任务，登记任务工时，调整任务信息，评论任务，查看任务的评论等等。"
 )
 
 
@@ -107,16 +106,28 @@ def _tool_to_meta(tool: BaseTool) -> dict:
     schema = getattr(tool, "args_schema", None)
     required_fields: List[str] = []
     all_fields: List[str] = []
+    output_fields: List[str] = []
     if schema and hasattr(schema, "model_json_schema"):
         schema_json = schema.model_json_schema()
         required_fields = list(schema_json.get("required", []) or [])
         all_fields = list((schema_json.get("properties") or {}).keys())
+
+    # 从 response_format 或 json_schema 中提取输出字段
+    extra = getattr(tool, "extra", None) or {}
+    response_format = extra.get("response_format")
+    if response_format and isinstance(response_format, dict):
+        json_schema = response_format.get("json_schema") or {}
+        if isinstance(json_schema, dict):
+            output_fields = list((json_schema.get("properties") or {}).keys())
+        elif isinstance(response_format, dict) and "properties" in response_format:
+            output_fields = list((response_format.get("properties") or {}).keys())
 
     return {
         "name": tool.name,
         "description": tool.description or "",
         "required_fields": required_fields,
         "all_fields": all_fields,
+        "output_fields": output_fields,
     }
 
 
@@ -126,16 +137,45 @@ def _normalize_name(raw: str) -> str:
 
 def _dependency_expand(selected: Set[str], tool_metas: List[dict]) -> Set[str]:
     """
-    根据工具必填参数进行依赖补全：
-    - 例如需要 projectId 时，补全 project 查询类工具。
+    根据工具参数和输出字段进行依赖补全：
+    - 基于 output_fields → required_fields 的自动匹配
+    - 如果工具 A 需要 projectId，工具 B 的输出包含 id 且描述/名称含 project，自动补全 B
+    - 兼容云效常见的参数模式（identifier, organizationId 等）
     """
+    # 扩展的资源关键词映射
     field_to_resource = {
         "projectid": ["project", "projects"],
-        "iterationid": ["iteration", "sprint"],
-        "workitemid": ["workitem", "requirement", "story", "task"],
-        "taskid": ["task"],
-        "userid": ["user", "member", "me"],
+        "parentid": ["project", "projects"],
+        "iterationid": ["iteration", "iterations", "sprint", "sprints"],
+        "sprintid": ["sprint", "iteration"],
+        "workitemid": ["workitem", "workitems", "requirement", "story", "req"],
+        "workitemtypeid": ["workitemtype", "workitem", "requirement"],
+        "taskid": ["task", "tasks"],
+        "parenttaskid": ["task", "tasks"],
+        "userid": ["user", "users", "member", "members", "me"],
+        "organizationid": ["organization", "org"],
+        "identifier": ["project", "iteration", "repository"],
     }
+
+    # 构建 "输出字段 → 提供该字段的工具" 索引
+    output_field_providers: Dict[str, List[str]] = {}
+    for meta in tool_metas:
+        normalized_name = _normalize_name(meta["name"])
+        desc = (meta["description"] or "").lower()
+        # 从 output_fields + all_fields 中提取
+        for field in meta.get("output_fields", []) + meta.get("all_fields", []):
+            norm_field = _normalize_name(field)
+            # 同时注册带 id 后缀的变体（如 name → nameId）
+            for key in [norm_field, f"{norm_field}id", f"{norm_field}_id"]:
+                output_field_providers.setdefault(key, []).append(meta["name"])
+            # 如果字段名就是 id，也按工具的资源类型注册
+            if norm_field == "id":
+                for resource_kws in field_to_resource.values():
+                    if any(k in normalized_name or k in desc for k in resource_kws):
+                        resource_type = resource_kws[0]
+                        output_field_providers.setdefault(
+                            f"{resource_type}id", []
+                        ).append(meta["name"])
 
     def find_provider_tools(resource_keywords: List[str]) -> List[str]:
         providers: List[str] = []
@@ -164,8 +204,15 @@ def _dependency_expand(selected: Set[str], tool_metas: List[dict]) -> Set[str]:
                 continue
             for required in selected_meta.get("required_fields", []):
                 required_norm = _normalize_name(required)
+                # 策略 1：通过 field_to_resource 映射查找
                 for field_pattern, resources in field_to_resource.items():
                     if field_pattern in required_norm:
+                        # 先从 output_field_providers 找（精确匹配）
+                        for provider in output_field_providers.get(required_norm, []):
+                            if provider not in all_selected:
+                                all_selected.add(provider)
+                                changed = True
+                        # 再从关键词找
                         for provider in find_provider_tools(resources):
                             if provider not in all_selected:
                                 all_selected.add(provider)
@@ -234,6 +281,56 @@ async def _llm_find_missing(
     return re.findall(r'"([^"]+)"', content)
 
 
+def _build_dependency_hints(tool_metas: List[dict], selected_names: Set[str]) -> str:
+    """生成工具依赖提示，告诉 Agent 正确的执行顺序。"""
+    field_to_resource = {
+        "projectid": "project",
+        "iterationid": "iteration",
+        "sprintid": "sprint/iteration",
+        "workitemid": "workitem/requirement",
+        "taskid": "task",
+        "userid": "user",
+        "organizationid": "organization",
+        "identifier": "project/iteration",
+    }
+
+    # 构建 资源类型 → 查询工具 映射
+    resource_queries: Dict[str, List[str]] = {}
+    for meta in tool_metas:
+        if meta["name"] not in selected_names:
+            continue
+        normalized = _normalize_name(meta["name"])
+        desc = (meta["description"] or "").lower()
+        for res_type in set(field_to_resource.values()):
+            keywords = res_type.replace("/", " ").split()
+            if any(k in normalized or k in desc for k in keywords) and any(
+                t in normalized for t in ("list", "get", "query", "search", "find")
+            ):
+                resource_queries.setdefault(res_type, []).append(meta["name"])
+
+    # 为每个需要参数的工具生成提示
+    hints: List[str] = []
+    for meta in tool_metas:
+        if meta["name"] not in selected_names:
+            continue
+        for required in meta.get("required_fields", []):
+            req_norm = _normalize_name(required)
+            for field_pattern, res_type in field_to_resource.items():
+                if field_pattern in req_norm:
+                    providers = resource_queries.get(res_type, [])
+                    if providers:
+                        provider_names = ", ".join(providers[:3])
+                        hints.append(
+                            f"调用 {meta['name']} 需要先获取 {required}，"
+                            f"请调用 {provider_names} 获取后传入。"
+                        )
+                    break
+
+    if not hints:
+        return ""
+    return "\n\n=== 工具调用顺序提示 ===\n" + "\n".join(hints)
+
+
 async def get_need_tools(tools: List[BaseTool]) -> List[str]:
     tool_metas = [_tool_to_meta(tool) for tool in tools]
     all_tool_names = {meta["name"] for meta in tool_metas}
@@ -262,17 +359,27 @@ async def get_need_tools(tools: List[BaseTool]) -> List[str]:
 async def create_yunxiao_agent():
     tools = await get_yunxiao_mcp_tools()
 
-    need_tools = await get_need_tools(tools)
+    tool_metas = [_tool_to_meta(tool) for tool in tools]
+    need_tool_names = set(await get_need_tools(tools))
 
-    need_tools_list = [tool for tool in tools if tool.name in need_tools]
+    need_tools_list = [tool for tool in tools if tool.name in need_tool_names]
 
-    print(f"需要使用的工具: {need_tools_list}")
+    # 构建依赖提示
+    dep_hints = _build_dependency_hints(tool_metas, need_tool_names)
+    system_content = (
+        "你是一个阿里云云效 DevOps 助手，帮助用户管理项目、迭代、需求和任务。"
+        "请根据用户的问题，给出回答。"
+    )
+    if dep_hints:
+        system_content += dep_hints
+
+    print(f"筛选出的工具数量: {len(need_tools_list)}")
+    print(f"筛选出的工具名称: {sorted(need_tool_names)}")
+
     return create_agent(
         model=chat_model,
         tools=need_tools_list,
-        system_prompt=SystemMessage(
-            content="你是一个助手，请根据用户的问题，给出回答。"
-        ),
+        system_prompt=SystemMessage(content=system_content),
         debug=False,
         checkpointer=checkpointer,
         middleware=[awrap_tool_call_middleware],
