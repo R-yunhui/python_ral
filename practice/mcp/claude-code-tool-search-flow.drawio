@@ -1,0 +1,208 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Claude Code Tool Search Flow" id="tool-search-flow">
+    <mxGraphModel dx="1200" dy="1600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="1500" background="#FAFAFA">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- ===== 分隔线 ===== -->
+        <mxCell id="divider-line" value="" style="endArrow=none;dashed=1;html=1;strokeColor=#999999;strokeWidth=2;verticalAlign=top;horizontal=1;" edge="1" parent="1">
+          <mxGeometry x="60" y="620" width="780" height="0" as="geometry"/>
+        </mxCell>
+        <mxCell id="divider-label-client" value="🔵 Client 端 (Agent)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=16;fontColor=#1565C0;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="70" y="630" width="200" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="divider-label-server" value="🟠 Server 端 (API)" style="text;html=1;strokeColor=none;fillColor=none;align=right;verticalAlign=top;fontSize=16;fontColor=#E65100;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="630" y="630" width="200" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 1: 开始 ===== -->
+        <mxCell id="2" value="开始&#xa;Agent 收到用户请求" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=2;fontSize=13;fontColor=#0D47A1;" vertex="1" parent="1">
+          <mxGeometry x="270" y="30" width="260" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 2 ===== -->
+        <mxCell id="3" value="Agent 上下文初始化&#xa;&#xa;• 少量已加载工具（非 defer_loading）&#xa;• tool_search_tool 始终可用" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1;fontSize=12;fontColor=#0D47A1;" vertex="1" parent="1">
+          <mxGeometry x="220" y="120" width="360" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="tag-defer" value="defer_loading: true" style="text;html=1;strokeColor=#E65100;fillColor=#FFF3E0;align=center;verticalAlign=middle;fontSize=10;fontColor=#E65100;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="600" y="135" width="120" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 3: 判断 ===== -->
+        <mxCell id="4" value="已有工具是否&#xa;满足需求？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;strokeWidth=2;fontSize=13;fontColor=#1B5E20;" vertex="1" parent="1">
+          <mxGeometry x="300" y="230" width="200" height="100" as="geometry"/>
+        </mxCell>
+
+        <!-- "是" 分支标签 -->
+        <mxCell id="tag-yes" value="是 → 直接调用" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#2E7D32;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="520" y="260" width="120" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="5" value="工具执行 → 返回结果" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#388E3C;strokeWidth=1;fontSize=12;fontColor=#1B5E20;" vertex="1" parent="1">
+          <mxGeometry x="660" y="250" width="160" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- "否" 分支 → 步骤 4 ===== -->
+        <mxCell id="tag-no" value="否 → 搜索新工具" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#C62828;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="370" y="340" width="160" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 4: 选择搜索方式 ===== -->
+        <mxCell id="6" value="选择搜索方式" style="rhombus;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=2;fontSize=13;fontColor=#0D47A1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="380" width="180" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- Regex 分支 -->
+        <mxCell id="7" value="Regex 搜索&#xa;构造正则 pattern" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1;fontSize=11;fontColor=#0D47A1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="490" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="tag-regex" value="regex" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=10;fontColor=#1565C0;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="240" y="450" width="60" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- BM25 分支 -->
+        <mxCell id="8" value="BM25 搜索&#xa;自然语言 query" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1;fontSize=11;fontColor=#0D47A1;" vertex="1" parent="1">
+          <mxGeometry x="540" y="490" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="tag-bm25" value="bm25" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=10;fontColor=#1565C0;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="470" y="450" width="60" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 5: 发出 tool_call ===== -->
+        <mxCell id="9" value="发出 tool_call&#xa;&#xa;tool_search_tool(query=&quot;weather...&quot;)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#1976D2;strokeWidth=2;fontSize=12;fontColor=#0D47A1;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="200" y="590" width="400" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 分隔线下方：Server 端 ===== -->
+
+        <!-- ===== 步骤 6: API Server 搜索 ===== -->
+        <mxCell id="10" value="[API Server] 在所有已注册工具中搜索&#xa;&#xa;搜索范围：&#xa;• 工具名 name&#xa;• 工具描述 description&#xa;• 参数名 inputSchema.properties&#xa;• 参数描述" style="rounded=0;whiteSpace=wrap;html=1;fillColor="#FFE0B2";strokeColor="#E65100";strokeWidth=2;fontSize=12;fontColor="#BF360C";fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="150" y="720" width="500" height="120" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 7: 返回 tool_reference ===== -->
+        <mxCell id="11" value="[API Server] 返回 3-5 个最匹配结果&#xa;&#xa;tool_reference 块（仅含元数据引用）" style="parallelogram;whiteSpace=wrap;html=1;fillColor=#FFCC80;strokeColor="#E65100";strokeWidth=2;fontSize=12;fontColor="#BF360C";fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="180" y="880" width="440" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="tag-tool-ref" value="tool_reference" style="text;html=1;strokeColor=none;fillColor=#FFF3E0;align=center;verticalAlign=middle;fontSize=10;fontColor=#E65100;fontStyle=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="640" y="895" width="120" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 8: 自动展开 ===== -->
+        <mxCell id="12" value="[自动展开] tool_reference → 完整工具定义&#xa;&#xa;name + description + inputSchema" style="rounded=0;whiteSpace=wrap;html=1;fillColor="#BBDEFB";strokeColor="#1976D2";strokeWidth=2;fontSize=12;fontColor="#0D47A1";fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="200" y="1000" width="400" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="tag-expand" value="expand" style="text;html=1;strokeColor=none;fillColor=#E3F2FD;align=center;verticalAlign=middle;fontSize=10;fontColor=#1565C0;fontStyle=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="620" y="1015" width="100" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 9: 加入工具池 ===== -->
+        <mxCell id="13" value="展开后的工具加入&#xa;当前会话可用工具池" style="rounded=0;whiteSpace=wrap;html=1;fillColor="#BBDEFB";strokeColor="#1976D2";strokeWidth=1;fontSize=12;fontColor="#0D47A1"" vertex="1" parent="1">
+          <mxGeometry x="250" y="1110" width="300" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 10: 选择工具 ===== -->
+        <mxCell id="14" value="Agent 从扩展后的&#xa;工具池中选择目标工具" style="rounded=0;whiteSpace=wrap;html=1;fillColor="#BBDEFB";strokeColor="#1976D2";strokeWidth=1;fontSize=12;fontColor="#0D47A1"" vertex="1" parent="1">
+          <mxGeometry x="250" y="1210" width="300" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 11: 发出目标 tool_call ===== -->
+        <mxCell id="15" value="发出目标工具的 tool_call&#xa;&#xa;如：get_weather(location=&quot;San Francisco&quot;)" style="rounded=0;whiteSpace=wrap;html=1;fillColor="#90CAF9";strokeColor="#1976D2";strokeWidth=2;fontSize=12;fontColor="#0D47A1";fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="180" y="1310" width="440" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 12: 工具执行 ===== -->
+        <mxCell id="16" value="工具执行，返回结果" style="rounded=0;whiteSpace=wrap;html=1;fillColor="#C8E6C9";strokeColor="#388E3C";strokeWidth=1;fontSize=12;fontColor="#1B5E20"" vertex="1" parent="1">
+          <mxGeometry x="280" y="1410" width="240" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 步骤 13: 结束 ===== -->
+        <mxCell id="17" value="结束&#xa;返回结果给用户" style="rounded=1;whiteSpace=wrap;html=1;fillColor="#C8E6C9";strokeColor="#2E7D32";strokeWidth=2;fontSize=13;fontColor="#1B5E20"" vertex="1" parent="1">
+          <mxGeometry x="280" y="1490" width="240" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- ===== 连线 ===== -->
+        <!-- 1 → 2 -->
+        <mxCell id="101" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1565C0;strokeWidth=2;endArrow=classic;" edge="1" parent="1" source="2" target="3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 2 → 3 -->
+        <mxCell id="102" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1565C0;strokeWidth=2;endArrow=classic;" edge="1" parent="1" source="3" target="4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 3 → 是分支 (右) -->
+        <mxCell id="103" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2E7D32;strokeWidth=2;endArrow=classic;" edge="1" parent="1" source="4" target="5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 3 → 否分支 (下) -->
+        <mxCell id="104" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#C62828;strokeWidth=2;endArrow=classic;" edge="1" parent="1" source="4" target="6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 4 → Regex -->
+        <mxCell id="105" value="Regex" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1976D2;strokeWidth=1;endArrow=classic;" edge="1" parent="1" source="6" target="7">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 4 → BM25 -->
+        <mxCell id="106" value="BM25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1976D2;strokeWidth=1;endArrow=classic;" edge="1" parent="1" source="6" target="8">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Regex → 5 -->
+        <mxCell id="107" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1976D2;strokeWidth=1;endArrow=classic;" edge="1" parent="1" source="7" target="9">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- BM25 → 5 -->
+        <mxCell id="108" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1976D2;strokeWidth=1;endArrow=classic;" edge="1" parent="1" source="8" target="9">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 5 → 6 (server) -->
+        <mxCell id="109" value="HTTP 请求" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#E65100;strokeWidth=2;endArrow=classic;dashed=1;" edge="1" parent="1" source="9" target="10">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 6 → 7 -->
+        <mxCell id="110" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor="#E65100";strokeWidth=2;endArrow=classic;" edge="1" parent="1" source="10" target="11">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 7 → 8 -->
+        <mxCell id="111" value="SSE 流返回" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor="#1976D2";strokeWidth=2;endArrow=classic;dashed=1;" edge="1" parent="1" source="11" target="12">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 8 → 9 -->
+        <mxCell id="112" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor="#1976D2";strokeWidth=1;endArrow=classic;" edge="1" parent="1" source="12" target="13">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 9 → 10 -->
+        <mxCell id="113" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor="#1976D2";strokeWidth=1;endArrow=classic;" edge="1" parent="1" source="13" target="14">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 10 → 11 -->
+        <mxCell id="114" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor="#1976D2";strokeWidth=2;endArrow=classic;" edge="1" parent="1" source="14" target="15">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 11 → 12 -->
+        <mxCell id="115" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor="#388E3C";strokeWidth=1;endArrow=classic;" edge="1" parent="1" source="15" target="16">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 12 → 13 -->
+        <mxCell id="116" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor="#2E7D32";strokeWidth=2;endArrow=classic;" edge="1" parent="1" source="16" target="17">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -102,7 +102,9 @@
       "Bash(wsl -l -v)",
       "Bash(findstr 10010)",
       "Bash(findstr LISTENING)",
-      "Bash(taskkill //F //PID 14476)"
+      "Bash(taskkill //F //PID 14476)",
+      "Bash(where drawio *)",
+      "Read(//c/Program Files/draw.io/**)"
     ]
   }
 }

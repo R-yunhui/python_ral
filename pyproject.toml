@@ -50,6 +50,7 @@ dependencies = [
     "markitdown[all]>=0.1.5",
     "markitdown-ocr>=0.1.0",
     "fastmcp>=3.2.4",
+    "google>=3.0.0",
 ]
 
 [project.optional-dependencies]
