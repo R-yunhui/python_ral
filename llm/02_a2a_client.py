@@ -137,7 +137,7 @@ async def demo_messages(base_url: str) -> None:
 
 def main():
     """主函数"""
-    BASE_URL = "http://localhost:9999"
+    BASE_URL = "http://localhost:9998"
 
     print("=" * 60)
     print("A2A Client Demo")
