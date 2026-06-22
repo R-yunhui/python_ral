@@ -108,7 +108,10 @@
       "mcp__plugin_playwright_playwright__browser_navigate",
       "mcp__plugin_playwright_playwright__browser_snapshot",
       "mcp__plugin_playwright_playwright__browser_take_screenshot",
-      "mcp__exa__web_search_exa"
+      "mcp__exa__web_search_exa",
+      "Bash(git submodule *)",
+      "Bash(git config *)",
+      "Bash(git ls-tree *)"
     ]
   }
 }
